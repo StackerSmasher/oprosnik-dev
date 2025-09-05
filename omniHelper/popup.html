@@ -1,20 +1,801 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My Extension</title>
-    <link rel="stylesheet" href="popup.css">
+    <title>OmniChat Traffic Analyzer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 450px;
+            min-height: 500px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .container {
+            padding: 20px;
+            background: white;
+            min-height: 500px;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            margin: -20px -20px 20px -20px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 20px;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #28a745;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .status-dot.inactive {
+            background: #dc3545;
+            animation: none;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        input:checked + .toggle-slider {
+            background-color: #667eea;
+        }
+
+        input:checked + .toggle-slider:before {
+            transform: translateX(26px);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            background: none;
+            border: none;
+            color: #666;
+            font-size: 14px;
+            font-weight: 500;
+            position: relative;
+            transition: color 0.3s;
+        }
+
+        .tab.active {
+            color: #667eea;
+        }
+
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .dialog-item {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .dialog-item:hover {
+            transform: translateX(5px);
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .dialog-id {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .copy-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.3s;
+        }
+
+        .copy-btn:hover {
+            background: #5a67d8;
+        }
+
+        .dialog-meta {
+            display: flex;
+            gap: 15px;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .dialog-meta span {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5a67d8;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .empty-state svg {
+            width: 60px;
+            height: 60px;
+            margin-bottom: 20px;
+            opacity: 0.3;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .network-log-item {
+            background: #f8f9fa;
+            border-left: 3px solid #667eea;
+            padding: 10px;
+            margin-bottom: 8px;
+            font-size: 12px;
+            font-family: 'Courier New', monospace;
+        }
+
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+
+        .log-url {
+            color: #666;
+            word-break: break-all;
+        }
+
+        #notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #28a745;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            transform: translateX(400px);
+            transition: transform 0.3s;
+            z-index: 1000;
+        }
+
+        #notification.show {
+            transform: translateX(0);
+        }
+    </style>
 </head>
 <body>
     <div class="container">
-        <h1>Appeal ID Tracker</h1>
-        <p>Intercepting omnichat.rt.ru requests</p>
-        <button id="actionBtn">Get Appeal IDs</button>
-        <button id="clearBtn">Clear History</button>
-        <div id="status"></div>
-        <div id="appealsList"></div>
+        <div class="header">
+            <h1>🔍 OmniChat Traffic Analyzer</h1>
+            <p>Анализатор трафика и автоответчик</p>
+        </div>
+
+        <div class="status-bar">
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Активно</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 12px;">Автоответ:</span>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="autoResponseToggle" checked>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" data-tab="dialogs">Dialog IDs</button>
+            <button class="tab" data-tab="appeals">Appeal IDs</button>
+            <button class="tab" data-tab="stats">Статистика</button>
+            <button class="tab" data-tab="network">Сеть</button>
+        </div>
+
+        <div class="tab-content active" id="dialogsTab">
+            <div class="action-buttons">
+                <button class="btn btn-primary" id="refreshBtn">🔄 Обновить</button>
+                <button class="btn btn-secondary" id="exportBtn">📥 Экспорт</button>
+                <button class="btn btn-danger" id="clearBtn">🗑️ Очистить</button>
+            </div>
+            
+            <div id="dialogsList">
+                <div class="empty-state">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                    </svg>
+                    <p>Нет найденных Dialog ID</p>
+                    <small>Откройте OmniChat для начала отслеживания</small>
+                </div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="appealsTab">
+            <div class="action-buttons">
+                <button class="btn btn-primary" id="refreshAppealsBtn">🔄 Обновить</button>
+                <button class="btn btn-secondary" id="createDialogBtn">➕ Создать Dialog</button>
+            </div>
+            
+            <div id="appealsList">
+                <div class="empty-state">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                    </svg>
+                    <p>Нет найденных Appeal ID</p>
+                    <small>Откройте чат с обращением</small>
+                </div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="statsTab">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="totalDialogs">0</div>
+                    <div class="stat-label">Dialog IDs</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="totalAppeals">0</div>
+                    <div class="stat-label">Appeal IDs</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="networkEvents">0</div>
+                    <div class="stat-label">Сетевых событий</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="uptime">0m</div>
+                    <div class="stat-label">Время работы</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="networkTab">
+            <div id="networkLog">
+                <div class="empty-state">
+                    <p>Нет сетевых событий</p>
+                </div>
+            </div>
+        </div>
     </div>
-    <script src="popup.js"></script>
+
+    <div id="notification">Скопировано!</div>
+
+    <script>
+        // Popup JavaScript
+        let currentTab = 'dialogs';
+        let startTime = Date.now();
+
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeTabs();
+            loadData();
+            setInterval(updateUptime, 1000);
+            
+            // Event listeners
+            document.getElementById('autoResponseToggle').addEventListener('change', toggleAutoResponse);
+            document.getElementById('refreshBtn').addEventListener('click', loadData);
+            document.getElementById('clearBtn').addEventListener('click', clearData);
+            document.getElementById('exportBtn').addEventListener('click', exportData);
+            document.getElementById('refreshAppealsBtn').addEventListener('click', loadData);
+            document.getElementById('createDialogBtn').addEventListener('click', createDialogForCurrentAppeal);
+        });
+
+        function initializeTabs() {
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.addEventListener('click', function() {
+                    const tabName = this.dataset.tab;
+                    switchTab(tabName);
+                });
+            });
+        }
+
+        function switchTab(tabName) {
+            // Update tabs
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+            
+            // Update content
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.getElementById(tabName + 'Tab').classList.add('active');
+            
+            currentTab = tabName;
+            
+            // Load data for the current tab
+            if (tabName === 'network') {
+                loadNetworkLog();
+            } else if (tabName === 'stats') {
+                loadStats();
+            } else if (tabName === 'appeals') {
+                loadAppeals();
+            }
+        }
+
+        function loadData() {
+            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+                if (!tabs[0]) return;
+                
+                chrome.tabs.sendMessage(tabs[0].id, {action: 'getDialogIds'}, function(response) {
+                    if (chrome.runtime.lastError) {
+                        console.log('Error:', chrome.runtime.lastError);
+                        // Try loading from storage
+                        loadFromStorage();
+                    } else if (response && response.success) {
+                        displayDialogIds(response.dialogIds);
+                        displayAppealIds(response.appealIds || []);
+                    }
+                });
+                
+                chrome.tabs.sendMessage(tabs[0].id, {action: 'getStats'}, function(response) {
+                    if (response && response.success) {
+                        updateStats(response.stats);
+                    }
+                });
+            });
+        }
+
+        function loadFromStorage() {
+            chrome.storage.local.get(['dialogIds'], function(result) {
+                if (result.dialogIds) {
+                    displayDialogIds(result.dialogIds);
+                }
+            });
+        }
+
+        function displayDialogIds(dialogIds) {
+            const container = document.getElementById('dialogsList');
+            
+            if (!dialogIds || dialogIds.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                        <p>Нет найденных Dialog ID</p>
+                        <small>Откройте OmniChat для начала отслеживания</small>
+                    </div>
+                `;
+                return;
+            }
+            
+            // Sort by last seen
+            dialogIds.sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
+            
+            const html = dialogIds.map(item => {
+                const time = new Date(item.lastSeen || item.firstSeen).toLocaleTimeString('ru-RU');
+                const count = item.seenCount || 1;
+                
+                return `
+                    <div class="dialog-item">
+                        <div class="dialog-id">
+                            <span>Dialog ID: <strong>${item.dialogId}</strong></span>
+                            <button class="copy-btn" onclick="copyToClipboard('${item.dialogId}')">📋 Копировать</button>
+                        </div>
+                        <div class="dialog-meta">
+                            <span>🕐 ${time}</span>
+                            <span>📊 ${count} раз</span>
+                            <span>📡 ${item.type || 'unknown'}</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            container.innerHTML = html;
+            document.getElementById('totalDialogs').textContent = dialogIds.length;
+        }
+
+        function loadNetworkLog() {
+            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+                if (!tabs[0]) return;
+                
+                chrome.tabs.sendMessage(tabs[0].id, {action: 'getNetworkLog'}, function(response) {
+                    if (response && response.success) {
+                        displayNetworkLog(response.networkLog);
+                    }
+                });
+            });
+        }
+
+        function displayNetworkLog(networkLog) {
+            const container = document.getElementById('networkLog');
+            
+            if (!networkLog || networkLog.length === 0) {
+                container.innerHTML = '<div class="empty-state"><p>Нет сетевых событий</p></div>';
+                return;
+            }
+            
+            // Show last 20 events
+            const recentEvents = networkLog.slice(-20).reverse();
+            
+            const html = recentEvents.map(event => {
+                const time = new Date(event.timestamp).toLocaleTimeString('ru-RU');
+                return `
+                    <div class="network-log-item">
+                        <div class="log-header">
+                            <span>${event.type.toUpperCase()} ${event.phase}</span>
+                            <span>${time}</span>
+                        </div>
+                        <div class="log-url">${event.url || event.id}</div>
+                    </div>
+                `;
+            }).join('');
+            
+            container.innerHTML = html;
+        }
+
+        function loadStats() {
+            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+                if (!tabs[0]) return;
+                
+                chrome.tabs.sendMessage(tabs[0].id, {action: 'getStats'}, function(response) {
+                    if (response && response.success) {
+                        updateStats(response.stats);
+                    }
+                });
+            });
+        }
+
+        function displayAppealIds(appealIds) {
+            const container = document.getElementById('appealsList');
+            
+            if (!appealIds || appealIds.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                        <p>Нет найденных Appeal ID</p>
+                        <small>Откройте чат с обращением</small>
+                    </div>
+                `;
+                return;
+            }
+            
+            // Sort by first seen
+            appealIds.sort((a, b) => (b.firstSeen || 0) - (a.firstSeen || 0));
+            
+            const html = appealIds.map(item => {
+                const time = new Date(item.firstSeen).toLocaleTimeString('ru-RU');
+                const hasDialog = item.dialogId ? '✅' : '❌';
+                const dialogStatus = item.dialogId ? `Dialog ID: ${item.dialogId}` : 'Нет Dialog ID';
+                
+                return `
+                    <div class="dialog-item">
+                        <div class="dialog-id">
+                            <span>Appeal ID: <strong>${item.appealId}</strong> ${hasDialog}</span>
+                            <button class="copy-btn" onclick="copyToClipboard('${item.appealId}')">📋 Копировать</button>
+                        </div>
+                        <div class="dialog-meta">
+                            <span>🕐 ${time}</span>
+                            <span>📡 ${item.type || 'unknown'}</span>
+                        </div>
+                        <div style="margin-top: 8px; font-size: 12px; color: ${item.dialogId ? '#28a745' : '#dc3545'};">
+                            ${dialogStatus}
+                            ${!item.dialogId ? '<button class="copy-btn" onclick="createDialogForAppeal(\'' + item.appealId + '\')" style="margin-left: 10px;">🔄 Создать</button>' : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            container.innerHTML = html;
+            document.getElementById('totalAppeals').textContent = appealIds.length;
+        }
+
+        function loadAppeals() {
+            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+                if (!tabs[0]) return;
+                
+                chrome.tabs.sendMessage(tabs[0].id, {action: 'getDialogIds'}, function(response) {
+                    if (response && response.success) {
+                        displayAppealIds(response.appealIds || []);
+                    }
+                });
+            });
+        }
+
+        function createDialogForCurrentAppeal() {
+            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+                if (!tabs[0]) return;
+                
+                // Extract appealId from current URL or ask user
+                const appealId = prompt('Введите Appeal ID для создания диалога:');
+                if (!appealId) return;
+                
+                createDialogForAppeal(appealId);
+            });
+        }
+
+        function createDialogForAppeal(appealId) {
+            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+                if (!tabs[0]) return;
+                
+                chrome.tabs.sendMessage(tabs[0].id, {
+                    action: 'createDialogForAppeal',
+                    appealId: appealId
+                }, function(response) {
+                    if (response && response.success && response.dialogId) {
+                        showNotification(`Dialog ID создан: ${response.dialogId}`);
+                        loadData(); // Refresh data
+                    } else {
+                        showNotification('Не удалось создать Dialog ID', 'error');
+                    }
+                });
+            });
+        }
+
+        function updateStats(stats) {
+            if (stats.dialogIdsCount !== undefined) {
+                document.getElementById('totalDialogs').textContent = stats.dialogIdsCount;
+            }
+            if (stats.appealIdsCount !== undefined) {
+                document.getElementById('totalAppeals').textContent = stats.appealIdsCount;
+            }
+            if (stats.networkLogCount !== undefined) {
+                document.getElementById('networkEvents').textContent = stats.networkLogCount;
+            }
+            
+            // Update status
+            const statusDot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+            
+            if (stats.currentUrl && stats.currentUrl.includes('omnichat.rt.ru')) {
+                statusDot.classList.remove('inactive');
+                statusText.textContent = 'Активно на OmniChat';
+            } else {
+                statusDot.classList.add('inactive');
+                statusText.textContent = 'Ожидание OmniChat';
+            }
+        }
+
+        function toggleAutoResponse(e) {
+            const enabled = e.target.checked;
+            
+            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+                if (!tabs[0]) return;
+                
+                chrome.tabs.sendMessage(tabs[0].id, {
+                    action: 'toggleAutoResponse'
+                }, function(response) {
+                    if (response && response.success) {
+                        showNotification(response.enabled ? 'Автоответ включен' : 'Автоответ выключен');
+                    }
+                });
+            });
+        }
+
+        function clearData() {
+            if (!confirm('Очистить все данные?')) return;
+            
+            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+                if (!tabs[0]) return;
+                
+                chrome.tabs.sendMessage(tabs[0].id, {action: 'clearData'}, function(response) {
+                    if (response && response.success) {
+                        showNotification('Данные очищены');
+                        loadData();
+                    }
+                });
+            });
+        }
+
+        function exportData() {
+            chrome.storage.local.get(['dialogIds', 'networkLog'], function(result) {
+                const data = {
+                    dialogIds: result.dialogIds || [],
+                    timestamp: new Date().toISOString(),
+                    source: 'OmniChat Traffic Analyzer'
+                };
+                
+                const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `omnichat-dialogs-${Date.now()}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+                
+                showNotification('Данные экспортированы');
+            });
+        }
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                showNotification('Dialog ID скопирован!');
+            });
+        }
+
+        function showNotification(text) {
+            const notification = document.getElementById('notification');
+            notification.textContent = text;
+            notification.classList.add('show');
+            
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 2000);
+        }
+
+        function updateUptime() {
+            const uptime = Math.floor((Date.now() - startTime) / 60000);
+            document.getElementById('uptime').textContent = uptime + 'm';
+        }
+    </script>
 </body>
 </html>
