@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "OmniChat Traffic Analyzer",
-  "version": "2.0.0",
-  "description": "Анализатор трафика OmniChat - автоматический перехват dialogId и автоответчик",
+  "version": "3.0.0",
+  "description": "Анализатор трафика OmniChat - улучшенный перехват и автоответчик",
   "permissions": [
     "activeTab",
     "storage",
     "tabs",
-    "clipboardWrite"
+    "clipboardWrite",
+    "scripting"
   ],
   "host_permissions": [
     "*://omnichat.rt.ru/*",
@@ -36,6 +37,12 @@
       "run_at": "document_start",
       "all_frames": true,
       "world": "ISOLATED"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["inject.js"],
+      "matches": ["*://omnichat.rt.ru/*", "*://*.omnichat.rt.ru/*"]
     }
   ],
   "icons": {
