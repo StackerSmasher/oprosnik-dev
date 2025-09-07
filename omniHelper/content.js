@@ -1,5 +1,5 @@
-// ===== TRAFFIC ANALYZER FOR OMNICHAT =====
-// Enhanced version with multiple auto-response methods
+// ===== ENHANCED TRAFFIC ANALYZER FOR OMNICHAT =====
+// Version 4.0 - Template-based auto-response system
 
 class OmniChatTrafficAnalyzer {
     constructor() {
@@ -8,38 +8,653 @@ class OmniChatTrafficAnalyzer {
         this.networkLog = [];
         this.autoResponseEnabled = true;
         this.debugMode = true;
-        this.lastMessageTime = 0;
-        this.responseDelay = 1500; // Delay before auto-response
-        this.sentResponses = new Set(); // Track sent responses to avoid duplicates
+        
+        // Queue system for handling multiple appeals
+        this.appealQueue = [];
+        this.isProcessingQueue = false;
+        this.processedAppeals = new Set(); // Track processed appeals
+        
+        // Template response configuration
+        this.templateConfig = {
+            responseDelay: 2000, // Delay before processing
+            clickDelay: 500, // Delay between clicks
+            templateText: 'Запрос принят в работу', // Template to select
+            maxRetries: 3
+        };
         
         this.init();
     }
 
     init() {
-        console.log('🚀 OmniChat Traffic Analyzer Enhanced initialized');
+        console.log('🚀 OmniChat Traffic Analyzer v4.0 initialized');
         console.log('📍 Current URL:', window.location.href);
         
         this.loadSettings();
-        this.injectMainWorldScript(); // Inject script into main world
+        this.injectMainWorldScript();
         this.setupMessageListener();
         this.setupDOMObserver();
-        this.setupInputDetection();
+        this.setupAppealDetection();
         this.exposeDebugInterface();
     }
 
-    // ===== INJECT SCRIPT INTO MAIN WORLD =====
+    // ===== APPEAL DETECTION SYSTEM =====
+    setupAppealDetection() {
+        console.log('👁️ Setting up appeal detection system...');
+        
+        // Monitor for new appeal elements in the UI
+        this.observeAppealList();
+        
+        // Check for existing appeals on page load
+        setTimeout(() => this.checkForExistingAppeals(), 2000);
+    }
+
+    observeAppealList() {
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.type === 'childList') {
+                    mutation.addedNodes.forEach((node) => {
+                        if (node.nodeType === Node.ELEMENT_NODE) {
+                            this.checkForNewAppeal(node);
+                        }
+                    });
+                }
+            });
+        });
+
+        // Find appeal list container
+        const findAndObserve = () => {
+            const appealContainers = [
+                '.appeals-list',
+                '.chat-list',
+                '.dialog-list',
+                '.conversation-list',
+                '[data-testid="appeals-list"]',
+                '.sidebar-content',
+                '.left-panel',
+                '.chats-container'
+            ];
+
+            for (const selector of appealContainers) {
+                const container = document.querySelector(selector);
+                if (container) {
+                    observer.observe(container, {
+                        childList: true,
+                        subtree: true
+                    });
+                    console.log('✅ Observing appeal container:', selector);
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        if (!findAndObserve()) {
+            // Retry if container not found immediately
+            setTimeout(() => findAndObserve(), 2000);
+        }
+    }
+
+    checkForNewAppeal(element) {
+        // Check if this element or its children contain appeal information
+        const appealIndicators = [
+            '[data-appeal-id]',
+            '[data-appealid]',
+            '.appeal-item',
+            '.chat-item',
+            '.dialog-item',
+            '.conversation-item'
+        ];
+
+        let appealElement = null;
+        
+        for (const selector of appealIndicators) {
+            appealElement = element.matches?.(selector) ? element : element.querySelector?.(selector);
+            if (appealElement) break;
+        }
+
+        if (!appealElement) return;
+
+        // Extract appeal ID
+        const appealId = this.extractAppealIdFromElement(appealElement);
+        
+        if (appealId && !this.processedAppeals.has(appealId)) {
+            console.log('🆕 New appeal detected:', appealId);
+            
+            // Check if it's unread/new
+            const isNew = this.isNewAppeal(appealElement);
+            
+            if (isNew && this.autoResponseEnabled) {
+                this.addAppealToQueue({
+                    appealId: appealId,
+                    element: appealElement,
+                    timestamp: Date.now()
+                });
+            }
+        }
+    }
+
+    extractAppealIdFromElement(element) {
+        // Try various methods to extract appeal ID
+        
+        // Method 1: Data attributes
+        const dataAppealId = element.dataset?.appealId || 
+                           element.dataset?.appealid || 
+                           element.getAttribute('data-appeal-id');
+        if (dataAppealId) return dataAppealId;
+
+        // Method 2: Text content patterns
+        const text = element.textContent || '';
+        const patterns = [
+            /Appeal[:\s#]+(\d+)/i,
+            /Обращение[:\s#]+(\d+)/i,
+            /#(\d{5,})/
+        ];
+
+        for (const pattern of patterns) {
+            const match = text.match(pattern);
+            if (match) return match[1];
+        }
+
+        // Method 3: ID attribute
+        if (element.id && element.id.includes('appeal')) {
+            const idMatch = element.id.match(/\d+/);
+            if (idMatch) return idMatch[0];
+        }
+
+        return null;
+    }
+
+    isNewAppeal(element) {
+        // Check indicators that this is a new/unread appeal
+        
+        // Check for unread indicators
+        const unreadIndicators = [
+            '.unread',
+            '.new',
+            '.badge',
+            '.notification',
+            '[data-unread="true"]',
+            '[data-status="new"]'
+        ];
+
+        for (const selector of unreadIndicators) {
+            if (element.querySelector(selector) || element.matches(selector)) {
+                return true;
+            }
+        }
+
+        // Check for specific classes
+        const classList = element.className || '';
+        if (classList.includes('unread') || 
+            classList.includes('new') || 
+            classList.includes('pending')) {
+            return true;
+        }
+
+        // Check for bold text (often indicates unread)
+        const fontWeight = window.getComputedStyle(element).fontWeight;
+        if (fontWeight === 'bold' || parseInt(fontWeight) >= 600) {
+            return true;
+        }
+
+        return false;
+    }
+
+    checkForExistingAppeals() {
+        console.log('🔍 Checking for existing appeals...');
+        
+        const appealSelectors = [
+            '[data-appeal-id]',
+            '.appeal-item',
+            '.chat-item:not(.read)',
+            '.dialog-item.unread',
+            '.conversation-item.new'
+        ];
+
+        const appeals = [];
+        
+        for (const selector of appealSelectors) {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(el => {
+                const appealId = this.extractAppealIdFromElement(el);
+                if (appealId && !this.processedAppeals.has(appealId)) {
+                    if (this.isNewAppeal(el)) {
+                        appeals.push({
+                            appealId: appealId,
+                            element: el
+                        });
+                    }
+                }
+            });
+        }
+
+        console.log(`📊 Found ${appeals.length} unprocessed appeals`);
+        
+        if (appeals.length > 0 && this.autoResponseEnabled) {
+            appeals.forEach(appeal => {
+                this.addAppealToQueue({
+                    ...appeal,
+                    timestamp: Date.now()
+                });
+            });
+        }
+    }
+
+    // ===== QUEUE MANAGEMENT =====
+    addAppealToQueue(appeal) {
+        // Check if already in queue
+        const exists = this.appealQueue.some(a => a.appealId === appeal.appealId);
+        if (exists) return;
+
+        console.log('➕ Adding appeal to queue:', appeal.appealId);
+        this.appealQueue.push(appeal);
+        
+        // Start processing if not already running
+        if (!this.isProcessingQueue) {
+            this.processQueue();
+        }
+    }
+
+    async processQueue() {
+        if (this.appealQueue.length === 0) {
+            this.isProcessingQueue = false;
+            console.log('✅ Queue processing complete');
+            return;
+        }
+
+        this.isProcessingQueue = true;
+        const appeal = this.appealQueue.shift();
+        
+        console.log('⚙️ Processing appeal:', appeal.appealId);
+        
+        try {
+            await this.processAppeal(appeal);
+            
+            // Mark as processed
+            this.processedAppeals.add(appeal.appealId);
+            
+            // Save to storage
+            this.saveProcessedAppeal(appeal.appealId);
+            
+        } catch (error) {
+            console.error('❌ Error processing appeal:', error);
+            
+            // Retry logic
+            appeal.retryCount = (appeal.retryCount || 0) + 1;
+            if (appeal.retryCount < this.templateConfig.maxRetries) {
+                console.log('🔄 Retrying appeal:', appeal.appealId);
+                this.appealQueue.push(appeal); // Add back to queue
+            }
+        }
+
+        // Wait before processing next
+        await this.wait(this.templateConfig.responseDelay);
+        
+        // Continue processing queue
+        this.processQueue();
+    }
+
+    // ===== TEMPLATE-BASED RESPONSE SYSTEM =====
+    async processAppeal(appeal) {
+        const startTime = Date.now();
+        const activity = {
+            appealId: appeal.appealId,
+            timestamp: startTime,
+            action: 'process'
+        };
+        
+        try {
+            console.log('🤖 Starting template response for appeal:', appeal.appealId);
+            
+            // Step 1: Click on the appeal to select it
+            const selected = await this.selectAppeal(appeal);
+            if (!selected) throw new Error('Failed to select appeal');
+
+            await this.wait(this.templateConfig.clickDelay);
+
+            // Step 2: Open template selector
+            const templateOpened = await this.openTemplateSelector();
+            if (!templateOpened) throw new Error('Failed to open template selector');
+
+            await this.wait(this.templateConfig.clickDelay);
+
+            // Step 3: Select the template
+            const templateSelected = await this.selectTemplate();
+            if (!templateSelected) throw new Error('Failed to select template');
+
+            await this.wait(this.templateConfig.clickDelay);
+
+            // Step 4: Send the message
+            const sent = await this.sendTemplateMessage();
+            if (!sent) throw new Error('Failed to send message');
+
+            console.log('✅ Successfully processed appeal:', appeal.appealId);
+            
+            // Track success
+            activity.success = true;
+            activity.responseTime = Date.now() - startTime;
+            
+        } catch (error) {
+            console.error('❌ Error processing appeal:', error);
+            
+            // Track failure
+            activity.success = false;
+            activity.error = error.message;
+            activity.responseTime = Date.now() - startTime;
+            
+            // Retry logic
+            appeal.retryCount = (appeal.retryCount || 0) + 1;
+            if (appeal.retryCount < this.templateConfig.maxRetries) {
+                console.log('🔄 Retrying appeal:', appeal.appealId);
+                this.appealQueue.push(appeal); // Add back to queue
+            }
+        }
+        
+        // Save activity to recent history
+        this.saveRecentActivity(activity);
+    }
+
+    async selectAppeal(appeal) {
+        console.log('👆 Selecting appeal:', appeal.appealId);
+        
+        // If we have the element, click it
+        if (appeal.element && document.contains(appeal.element)) {
+            appeal.element.click();
+            
+            // Also try to click any clickable child
+            const clickable = appeal.element.querySelector('a, button, [role="button"]');
+            if (clickable) clickable.click();
+            
+            return true;
+        }
+
+        // Otherwise, try to find it again
+        const selectors = [
+            `[data-appeal-id="${appeal.appealId}"]`,
+            `[data-appealid="${appeal.appealId}"]`,
+            `#appeal-${appeal.appealId}`,
+            `.appeal-item:contains("${appeal.appealId}")` // Note: :contains is jQuery
+        ];
+
+        for (const selector of selectors) {
+            try {
+                const element = document.querySelector(selector);
+                if (element) {
+                    element.click();
+                    return true;
+                }
+            } catch (e) {
+                // Selector might not be valid
+            }
+        }
+
+        // Fallback: Find by text content
+        const allAppeals = document.querySelectorAll('.appeal-item, .chat-item, .dialog-item');
+        for (const el of allAppeals) {
+            if (el.textContent?.includes(appeal.appealId)) {
+                el.click();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    async openTemplateSelector() {
+        console.log('📋 Opening template selector...');
+        
+        const templateButtonSelectors = [
+            // Common template button selectors
+            'button[title*="шаблон"]',
+            'button[title*="template"]',
+            'button[aria-label*="шаблон"]',
+            'button[aria-label*="template"]',
+            '.template-button',
+            '.template-selector-button',
+            '[data-testid="template-button"]',
+            'button:has(.icon-template)',
+            'button:has(svg[data-icon="template"])',
+            
+            // Icon-based selectors
+            'button svg[class*="template"]',
+            'button i[class*="template"]',
+            
+            // Text-based selectors
+            'button:contains("Шаблон")',
+            'button:contains("Template")',
+            
+            // Generic toolbar buttons that might be template
+            '.toolbar button:nth-of-type(2)', // Often template is second button
+            '.message-toolbar button[title]',
+            '.chat-toolbar button'
+        ];
+
+        for (const selector of templateButtonSelectors) {
+            try {
+                const button = document.querySelector(selector);
+                if (button) {
+                    console.log('Found template button with selector:', selector);
+                    button.click();
+                    
+                    // Wait for template menu to appear
+                    await this.wait(300);
+                    
+                    // Check if menu appeared
+                    const menuAppeared = document.querySelector('.template-menu, .template-list, .dropdown-menu, [role="menu"]');
+                    if (menuAppeared) {
+                        return true;
+                    }
+                }
+            } catch (e) {
+                // Some selectors might not be valid
+            }
+        }
+
+        // Fallback: Try to find by visual inspection
+        const allButtons = document.querySelectorAll('button');
+        for (const button of allButtons) {
+            const title = button.title || button.getAttribute('aria-label') || '';
+            const text = button.textContent || '';
+            
+            if (title.toLowerCase().includes('шаблон') || 
+                title.toLowerCase().includes('template') ||
+                text.toLowerCase().includes('шаблон') ||
+                text.toLowerCase().includes('template')) {
+                
+                button.click();
+                await this.wait(300);
+                
+                const menuAppeared = document.querySelector('.template-menu, .template-list, .dropdown-menu');
+                if (menuAppeared) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    async selectTemplate() {
+        console.log('✅ Selecting template:', this.templateConfig.templateText);
+        
+        const templateSelectors = [
+            // Direct template item selectors
+            '.template-item',
+            '.template-option',
+            '.template-list-item',
+            '[role="menuitem"]',
+            '.dropdown-item',
+            '.menu-item',
+            
+            // List-based selectors
+            '.template-list li',
+            '.template-menu li',
+            'ul[role="menu"] li',
+            '.dropdown-menu a',
+            '.dropdown-menu button'
+        ];
+
+        // First, try to find by exact text
+        for (const selector of templateSelectors) {
+            const items = document.querySelectorAll(selector);
+            for (const item of items) {
+                const text = item.textContent?.trim();
+                if (text && text.includes(this.templateConfig.templateText)) {
+                    console.log('Found template by text:', text);
+                    item.click();
+                    return true;
+                }
+            }
+        }
+
+        // If not found by text, try to select the first template (as specified)
+        for (const selector of templateSelectors) {
+            const firstItem = document.querySelector(selector + ':first-child');
+            if (firstItem) {
+                console.log('Selecting first template item');
+                firstItem.click();
+                return true;
+            }
+        }
+
+        // Alternative: Look for any clickable element in template menu
+        const templateMenu = document.querySelector('.template-menu, .template-list, .dropdown-menu, [role="menu"]');
+        if (templateMenu) {
+            const firstClickable = templateMenu.querySelector('a, button, li, [role="menuitem"]');
+            if (firstClickable) {
+                firstClickable.click();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    async sendTemplateMessage() {
+        console.log('📤 Sending template message...');
+        
+        // Wait for template to be inserted
+        await this.wait(500);
+        
+        const sendButtonSelectors = [
+            // Specific send button selectors
+            'button[title*="отправить"]',
+            'button[title*="send"]',
+            'button[title*="Отправить"]',
+            'button[aria-label*="send"]',
+            'button[aria-label*="отправить"]',
+            '.send-button',
+            '.message-send',
+            '[data-testid="send-button"]',
+            
+            // Icon-based selectors
+            'button svg[data-icon="send"]',
+            'button i.fa-paper-plane',
+            'button i.icon-send',
+            
+            // Generic submit buttons
+            'button[type="submit"]:not([disabled])',
+            
+            // Position-based (send button often at bottom right)
+            '.message-input-container button:last-child',
+            '.chat-footer button:last-child'
+        ];
+
+        for (const selector of sendButtonSelectors) {
+            try {
+                const button = document.querySelector(selector);
+                if (button && !button.disabled) {
+                    console.log('Found send button with selector:', selector);
+                    
+                    // Ensure button is visible and clickable
+                    const rect = button.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) {
+                        button.click();
+                        
+                        // Also dispatch events for better compatibility
+                        button.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                        button.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                        button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                        
+                        return true;
+                    }
+                }
+            } catch (e) {
+                // Some selectors might fail
+            }
+        }
+
+        // Fallback: Try Enter key in message input
+        const messageInput = document.querySelector('textarea, [contenteditable="true"]');
+        if (messageInput) {
+            messageInput.focus();
+            const enterEvent = new KeyboardEvent('keydown', {
+                key: 'Enter',
+                code: 'Enter',
+                keyCode: 13,
+                which: 13,
+                bubbles: true
+            });
+            messageInput.dispatchEvent(enterEvent);
+            return true;
+        }
+
+        return false;
+    }
+
+    // ===== HELPER METHODS =====
+    wait(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    saveProcessedAppeal(appealId) {
+        chrome.storage.local.get(['processedAppeals'], (result) => {
+            const processed = result.processedAppeals || [];
+            processed.push({
+                appealId: appealId,
+                timestamp: Date.now(),
+                date: new Date().toISOString()
+            });
+            
+            // Keep only last 100 processed appeals
+            const trimmed = processed.slice(-100);
+            
+            chrome.storage.local.set({ processedAppeals: trimmed });
+        });
+    }
+
+    loadSettings() {
+        chrome.storage.local.get(['autoResponseEnabled', 'processedAppeals', 'templateConfig'], (result) => {
+            if (result.autoResponseEnabled !== undefined) {
+                this.autoResponseEnabled = result.autoResponseEnabled;
+            }
+            
+            if (result.processedAppeals) {
+                result.processedAppeals.forEach(item => {
+                    this.processedAppeals.add(item.appealId);
+                });
+            }
+            
+            if (result.templateConfig) {
+                Object.assign(this.templateConfig, result.templateConfig);
+            }
+            
+            console.log('⚙️ Settings loaded - Auto-response:', this.autoResponseEnabled);
+            console.log('📋 Template config:', this.templateConfig);
+        });
+    }
+
+    // ===== EXISTING METHODS (Keep for compatibility) =====
+    
     injectMainWorldScript() {
         const script = document.createElement('script');
         script.textContent = `
             (function() {
-                console.log('🎯 OmniChat Interceptor injected into main world');
+                console.log('🎯 OmniChat Interceptor injected');
                 
-                // Store original methods
                 const originalFetch = window.fetch;
                 const originalXHRSend = XMLHttpRequest.prototype.send;
-                const originalWS = window.WebSocket;
                 
-                // Create communication channel with content script
                 function sendToContentScript(data) {
                     window.postMessage({
                         source: 'omnichat-interceptor',
@@ -53,7 +668,6 @@ class OmniChatTrafficAnalyzer {
                     const [url, options = {}] = args;
                     const requestId = Date.now() + '-' + Math.random();
                     
-                    // Log request
                     sendToContentScript({
                         id: requestId,
                         type: 'fetch',
@@ -68,7 +682,6 @@ class OmniChatTrafficAnalyzer {
                         const response = await originalFetch.apply(this, args);
                         const clonedResponse = response.clone();
                         
-                        // Try to read response
                         const contentType = response.headers.get('content-type');
                         if (contentType && contentType.includes('application/json')) {
                             clonedResponse.json().then(body => {
@@ -96,55 +709,7 @@ class OmniChatTrafficAnalyzer {
                     }
                 };
                 
-                // Intercept XHR
-                XMLHttpRequest.prototype.send = function(body) {
-                    const xhr = this;
-                    const requestId = Date.now() + '-' + Math.random();
-                    
-                    // Store request data
-                    sendToContentScript({
-                        id: requestId,
-                        type: 'xhr',
-                        phase: 'request',
-                        url: xhr._url || '',
-                        method: xhr._method || 'GET',
-                        body: body,
-                        timestamp: Date.now()
-                    });
-                    
-                    // Monitor response
-                    const originalOnReadyStateChange = xhr.onreadystatechange;
-                    xhr.onreadystatechange = function() {
-                        if (xhr.readyState === 4) {
-                            try {
-                                const responseText = xhr.responseText;
-                                let responseBody = responseText;
-                                
-                                try {
-                                    responseBody = JSON.parse(responseText);
-                                } catch (e) {}
-                                
-                                sendToContentScript({
-                                    id: requestId,
-                                    type: 'xhr',
-                                    phase: 'response',
-                                    url: xhr._url || '',
-                                    status: xhr.status,
-                                    body: responseBody,
-                                    timestamp: Date.now()
-                                });
-                            } catch (e) {}
-                        }
-                        
-                        if (originalOnReadyStateChange) {
-                            originalOnReadyStateChange.apply(this, arguments);
-                        }
-                    };
-                    
-                    return originalXHRSend.call(this, body);
-                };
-                
-                // Store URL in XHR open
+                // Store URL in XHR
                 const originalXHROpen = XMLHttpRequest.prototype.open;
                 XMLHttpRequest.prototype.open = function(method, url, ...args) {
                     this._method = method;
@@ -152,47 +717,13 @@ class OmniChatTrafficAnalyzer {
                     return originalXHROpen.apply(this, [method, url, ...args]);
                 };
                 
-                // Intercept WebSocket
-                window.WebSocket = function(url, protocols) {
-                    console.log('🔌 WebSocket connection:', url);
-                    const ws = new originalWS(url, protocols);
-                    const wsId = Date.now() + '-' + Math.random();
-                    
-                    ws.addEventListener('message', function(event) {
-                        sendToContentScript({
-                            id: wsId,
-                            type: 'websocket',
-                            phase: 'message',
-                            url: url,
-                            data: event.data,
-                            timestamp: Date.now()
-                        });
-                    });
-                    
-                    const originalSend = ws.send;
-                    ws.send = function(data) {
-                        sendToContentScript({
-                            id: wsId,
-                            type: 'websocket',
-                            phase: 'send',
-                            url: url,
-                            data: data,
-                            timestamp: Date.now()
-                        });
-                        return originalSend.call(this, data);
-                    };
-                    
-                    return ws;
-                };
-                
-                console.log('✅ All interceptors installed in main world');
+                console.log('✅ Interceptors installed');
             })();
         `;
         
         (document.head || document.documentElement).appendChild(script);
         script.remove();
         
-        // Listen for messages from injected script
         window.addEventListener('message', (event) => {
             if (event.data && event.data.source === 'omnichat-interceptor') {
                 this.handleInterceptedData(event.data.data);
@@ -200,414 +731,51 @@ class OmniChatTrafficAnalyzer {
         });
     }
 
-    // ===== HANDLE INTERCEPTED DATA =====
     handleInterceptedData(data) {
-        // Extract dialogId and check for incoming messages
         if (data.body) {
             const dialogId = this.findDialogIdInObject(data.body);
             const appealId = this.findAppealIdInObject(data.body);
             
             if (dialogId) {
-                console.log('🎯 Found dialogId:', dialogId);
                 this.saveDialogId(dialogId, data);
             }
             
             if (appealId) {
-                console.log('🎯 Found appealId:', appealId);
                 this.saveAppealId(appealId, dialogId, data);
-            }
-            
-            // Check if it's an incoming message
-            if (this.isIncomingMessage(data.url, data.method, data.body)) {
-                console.log('📨 Incoming message detected!');
-                this.handleIncomingMessage(data.body);
+                
+                // Check if this is a new appeal notification
+                if (this.isNewAppealNotification(data)) {
+                    console.log('🔔 New appeal detected via API:', appealId);
+                    
+                    // Add slight delay to let UI update
+                    setTimeout(() => {
+                        this.checkForExistingAppeals();
+                    }, 1000);
+                }
             }
         }
         
         this.logNetworkEvent(data);
     }
 
-    // ===== AUTO-RESPONSE SYSTEM =====
-    handleIncomingMessage(messageData) {
-        if (!this.autoResponseEnabled) {
-            console.log('ℹ️ Auto-response disabled');
-            return;
-        }
-        
-        const dialogId = this.findDialogIdInObject(messageData);
-        const messageId = messageData.id || messageData.messageId || Date.now();
-        
-        // Check if we already responded to this message
-        const responseKey = `${dialogId}-${messageId}`;
-        if (this.sentResponses.has(responseKey)) {
-            console.log('✅ Already responded to this message');
-            return;
-        }
-        
-        console.log('🤖 Preparing auto-response for dialogId:', dialogId);
-        
-        // Add delay to make it more natural
-        setTimeout(() => {
-            this.sendAutoResponse(dialogId, messageId);
-        }, this.responseDelay);
-    }
-
-    async sendAutoResponse(dialogId, messageId) {
-        const responseKey = `${dialogId}-${messageId}`;
-        
-        // Mark as sent to avoid duplicates
-        this.sentResponses.add(responseKey);
-        
-        const responseText = "Добрый день! Запрос принят в работу. Пожалуйста, не покидайте чат и оставайтесь на связи.";
-        
-        // Method 1: Try API call
-        const apiSuccess = await this.sendViaAPI(dialogId, responseText);
-        
-        if (apiSuccess) {
-            console.log('✅ Auto-response sent via API');
-            return;
-        }
-        
-        // Method 2: Try DOM manipulation
-        const domSuccess = await this.sendViaDOM(responseText);
-        
-        if (domSuccess) {
-            console.log('✅ Auto-response sent via DOM');
-            return;
-        }
-        
-        // Method 3: Try injected function call
-        const injectedSuccess = await this.sendViaInjectedFunction(dialogId, responseText);
-        
-        if (injectedSuccess) {
-            console.log('✅ Auto-response sent via injected function');
-            return;
-        }
-        
-        console.error('❌ All auto-response methods failed');
-        // Remove from sent responses to retry later
-        this.sentResponses.delete(responseKey);
-    }
-
-    // Method 1: API Call
-    async sendViaAPI(dialogId, text) {
-        try {
-            const response = await fetch('https://omnichat.rt.ru/core/messages/send-agent-message', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest'
-                },
-                credentials: 'include',
-                body: JSON.stringify({
-                    dialogId: dialogId,
-                    text: text,
-                    replyId: null,
-                    templateId: 5103
-                })
-            });
-            
-            return response.ok;
-        } catch (error) {
-            console.error('API method failed:', error);
-            return false;
-        }
-    }
-
-    // Method 2: DOM Manipulation
-    async sendViaDOM(text) {
-        try {
-            // Find message input field
-            const inputSelectors = [
-                'textarea[placeholder*="сообщение"]',
-                'textarea[placeholder*="message"]',
-                'textarea[placeholder*="Введите"]',
-                'textarea[placeholder*="Напишите"]',
-                '.message-input textarea',
-                '.chat-input textarea',
-                '.send-message-input',
-                '[contenteditable="true"]',
-                'div[role="textbox"]',
-                'textarea.form-control',
-                'textarea[name="message"]'
-            ];
-            
-            let messageInput = null;
-            for (const selector of inputSelectors) {
-                messageInput = document.querySelector(selector);
-                if (messageInput) break;
-            }
-            
-            if (!messageInput) {
-                console.log('❌ Message input not found');
-                return false;
-            }
-            
-            // Focus on input
-            messageInput.focus();
-            
-            // Set value based on element type
-            if (messageInput.tagName === 'TEXTAREA' || messageInput.tagName === 'INPUT') {
-                // Store original value
-                const originalValue = messageInput.value;
-                
-                // Set new value
-                messageInput.value = text;
-                
-                // Trigger input events
-                messageInput.dispatchEvent(new Event('input', { bubbles: true }));
-                messageInput.dispatchEvent(new Event('change', { bubbles: true }));
-                
-                // Trigger React events if present
-                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                    window.HTMLTextAreaElement.prototype, 'value'
-                ).set;
-                nativeInputValueSetter.call(messageInput, text);
-                
-                messageInput.dispatchEvent(new Event('input', { bubbles: true }));
-            } else if (messageInput.contentEditable === 'true') {
-                // For contenteditable elements
-                messageInput.innerHTML = text;
-                messageInput.innerText = text;
-                
-                // Trigger input event
-                messageInput.dispatchEvent(new Event('input', { bubbles: true }));
-                messageInput.dispatchEvent(new InputEvent('input', {
-                    bubbles: true,
-                    data: text,
-                    inputType: 'insertText'
-                }));
-            }
-            
-            // Small delay before clicking send
-            await new Promise(resolve => setTimeout(resolve, 100));
-            
-            // Find and click send button
-            const sendSelectors = [
-                'button[title*="отправить"]',
-                'button[title*="send"]',
-                'button[title*="Отправить"]',
-                'button[aria-label*="send"]',
-                'button[aria-label*="отправить"]',
-                '.send-button',
-                '.message-send',
-                'button[type="submit"]',
-                'button svg[data-icon="send"]',
-                'button:has(svg)',
-                '[data-testid*="send"]'
-            ];
-            
-            let sendButton = null;
-            for (const selector of sendSelectors) {
-                sendButton = document.querySelector(selector);
-                if (sendButton) break;
-            }
-            
-            if (sendButton) {
-                // Click the button
-                sendButton.click();
-                
-                // Also trigger mousedown/mouseup for better compatibility
-                sendButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                sendButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                sendButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                
-                console.log('✅ Clicked send button');
-                return true;
-            } else {
-                // Try Enter key as fallback
-                const enterEvent = new KeyboardEvent('keydown', {
-                    key: 'Enter',
-                    code: 'Enter',
-                    keyCode: 13,
-                    which: 13,
-                    bubbles: true
-                });
-                messageInput.dispatchEvent(enterEvent);
-                
-                console.log('✅ Sent via Enter key');
-                return true;
-            }
-            
-        } catch (error) {
-            console.error('DOM method failed:', error);
-            return false;
-        }
-    }
-
-    // Method 3: Inject and call send function
-    async sendViaInjectedFunction(dialogId, text) {
-        try {
-            // Inject a function to send message using page's internal methods
-            const script = document.createElement('script');
-            script.textContent = `
-                (function() {
-                    try {
-                        // Try to find send message function in window or app context
-                        const possiblePaths = [
-                            'window.sendMessage',
-                            'window.app.sendMessage',
-                            'window.chatApp.sendMessage',
-                            'window.omnichat.sendMessage',
-                            'window.OmniChat.sendMessage',
-                            'window.__app__.sendMessage',
-                            'window.store.dispatch'
-                        ];
-                        
-                        for (const path of possiblePaths) {
-                            const func = path.split('.').reduce((obj, key) => obj?.[key], window);
-                            if (typeof func === 'function') {
-                                console.log('Found send function at:', path);
-                                func({ dialogId: '${dialogId}', text: '${text}' });
-                                return;
-                            }
-                        }
-                        
-                        // Try to find React component
-                        const reactRoot = document.querySelector('#root, #app, .app-container');
-                        if (reactRoot && reactRoot._reactRootContainer) {
-                            console.log('Found React root, attempting to send via React');
-                            // This would need more specific implementation based on the app
-                        }
-                        
-                    } catch (e) {
-                        console.error('Injected function failed:', e);
-                    }
-                })();
-            `;
-            
-            document.head.appendChild(script);
-            script.remove();
-            
-            // We can't easily determine success here, so return false
-            return false;
-            
-        } catch (error) {
-            console.error('Injection method failed:', error);
-            return false;
-        }
-    }
-
-    // ===== ENHANCED INPUT DETECTION =====
-    setupInputDetection() {
-        // Monitor for any typing activity
-        document.addEventListener('focusin', (e) => {
-            if (this.isMessageInput(e.target)) {
-                console.log('📝 Input focused, ready for auto-response');
-                this.ensureAutoResponseReady();
-            }
-        });
-        
-        // Monitor paste events globally
-        document.addEventListener('paste', (e) => {
-            if (this.isMessageInput(e.target)) {
-                console.log('📋 Content pasted in message input');
-            }
-        });
-    }
-
-    ensureAutoResponseReady() {
-        // Make sure we have all necessary data for auto-response
-        if (!this.dialogIds.size) {
-            console.log('⚠️ No dialog IDs available yet');
-            // Try to extract from current page
-            this.extractDialogIdFromPage();
-        }
-    }
-
-    extractDialogIdFromPage() {
-        // Try multiple methods to find dialogId in the current page
-        
-        // Method 1: Check URL
-        const urlParams = new URLSearchParams(window.location.search);
-        const urlDialogId = urlParams.get('dialogId') || urlParams.get('dialog_id');
-        if (urlDialogId) {
-            this.saveDialogId(urlDialogId, { source: 'url', type: 'page-extract' });
-            return urlDialogId;
-        }
-        
-        // Method 2: Check data attributes
-        const elementsWithData = document.querySelectorAll('[data-dialog-id], [data-dialogid], [data-dialog]');
-        for (const elem of elementsWithData) {
-            const dialogId = elem.dataset.dialogId || elem.dataset.dialogid || elem.dataset.dialog;
-            if (dialogId) {
-                this.saveDialogId(dialogId, { source: 'data-attribute', type: 'page-extract' });
-                return dialogId;
-            }
-        }
-        
-        // Method 3: Check page content for patterns
-        const pageText = document.body.innerText;
-        const patterns = [
-            /dialogId[:\s]+(\d+)/i,
-            /dialog_id[:\s]+(\d+)/i,
-            /Dialog ID[:\s]+(\d+)/i
+    isNewAppealNotification(data) {
+        // Check if this is a notification about new appeal
+        const indicators = [
+            'new_appeal',
+            'new_chat',
+            'incoming_message',
+            'appeal_created',
+            'notification'
         ];
         
-        for (const pattern of patterns) {
-            const match = pageText.match(pattern);
-            if (match && match[1]) {
-                this.saveDialogId(match[1], { source: 'page-content', type: 'page-extract' });
-                return match[1];
-            }
-        }
+        const url = data.url?.toLowerCase() || '';
+        const body = JSON.stringify(data.body).toLowerCase();
         
-        return null;
+        return indicators.some(indicator => 
+            url.includes(indicator) || body.includes(indicator)
+        );
     }
 
-    // ===== HELPERS (keep existing helper methods) =====
-    
-    isMessageInput(element) {
-        if (!element) return false;
-        
-        const tagName = element.tagName;
-        if (tagName !== 'TEXTAREA' && tagName !== 'INPUT' && element.contentEditable !== 'true') {
-            return false;
-        }
-        
-        const attributes = [
-            element.placeholder,
-            element.className,
-            element.id,
-            element.name,
-            element.getAttribute('aria-label')
-        ].join(' ').toLowerCase();
-        
-        const keywords = ['message', 'сообщен', 'chat', 'чат', 'reply', 'ответ', 'comment', 'коммент'];
-        
-        return keywords.some(keyword => attributes.includes(keyword));
-    }
-
-    isIncomingMessage(url, method, body) {
-        if (!body) return false;
-        
-        // Skip our own messages
-        if (url && url.includes('send-agent-message')) return false;
-        
-        // Check message characteristics
-        const type = body.type || body.messageType || (body.message && body.message.type);
-        const author = body.author || (body.message && body.message.author);
-        const direction = body.direction || body.messageDirection;
-        
-        // Positive indicators for incoming message
-        if (type === 'client' || type === 'user' || type === 'incoming') return true;
-        if (author === 'client' || author === 'user' || author === 'customer') return true;
-        if (direction === 'incoming' || direction === 'in') return true;
-        
-        // Negative indicators
-        if (type === 'agent' || type === 'bot' || type === 'outgoing' || type === 'system') return false;
-        if (author === 'agent' || author === 'bot' || author === 'operator') return false;
-        if (direction === 'outgoing' || direction === 'out') return false;
-        
-        // Check for message content (potential incoming message)
-        const hasContent = !!(body.text || body.content || body.message || (body.message && body.message.text));
-        const hasTemplateId = !!(body.templateId || body.template_id);
-        
-        // If has content but no template, likely incoming
-        return hasContent && !hasTemplateId;
-    }
-
-    // Keep all other existing methods from original code...
     findDialogIdInObject(obj) {
         if (!obj || typeof obj !== 'object') return null;
         
@@ -649,7 +817,6 @@ class OmniChatTrafficAnalyzer {
             if (obj[key]) return String(obj[key]);
         }
         
-        // Similar nested search for appealId
         const queue = [obj];
         const visited = new Set();
         
@@ -735,20 +902,6 @@ class OmniChatTrafficAnalyzer {
         }
     }
 
-    loadSettings() {
-        chrome.storage.local.get(['autoResponseEnabled', 'dialogIds'], (result) => {
-            if (result.autoResponseEnabled !== undefined) {
-                this.autoResponseEnabled = result.autoResponseEnabled;
-            }
-            if (result.dialogIds) {
-                result.dialogIds.forEach(item => {
-                    this.dialogIds.set(item.dialogId, item);
-                });
-            }
-            console.log('⚙️ Settings loaded - Auto-response:', this.autoResponseEnabled);
-        });
-    }
-
     setupMessageListener() {
         chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             console.log('📨 Message received:', request.action);
@@ -782,24 +935,16 @@ class OmniChatTrafficAnalyzer {
                     this.dialogIds.clear();
                     this.appealIds.clear();
                     this.networkLog = [];
-                    this.sentResponses.clear();
-                    chrome.storage.local.remove(['dialogIds', 'appealIds', 'networkLog']);
+                    this.processedAppeals.clear();
+                    this.appealQueue = [];
+                    chrome.storage.local.remove(['dialogIds', 'appealIds', 'networkLog', 'processedAppeals']);
                     sendResponse({ success: true });
                     break;
                     
                 case 'testAutoResponse':
-                    if (request.dialogId) {
-                        this.sendAutoResponse(request.dialogId, 'test-' + Date.now());
-                        sendResponse({ success: true });
-                    } else {
-                        const lastDialogId = Array.from(this.dialogIds.keys()).pop();
-                        if (lastDialogId) {
-                            this.sendAutoResponse(lastDialogId, 'test-' + Date.now());
-                            sendResponse({ success: true, dialogId: lastDialogId });
-                        } else {
-                            sendResponse({ success: false, error: 'No dialog ID available' });
-                        }
-                    }
+                    // Manual test trigger
+                    this.checkForExistingAppeals();
+                    sendResponse({ success: true });
                     break;
                     
                 case 'getStats':
@@ -811,10 +956,95 @@ class OmniChatTrafficAnalyzer {
                             networkLogCount: this.networkLog.length,
                             autoResponseEnabled: this.autoResponseEnabled,
                             currentUrl: window.location.href,
-                            sentResponses: this.sentResponses.size
+                            processedAppeals: this.processedAppeals.size,
+                            queueLength: this.appealQueue.length,
+                            isProcessing: this.isProcessingQueue
                         }
                     });
                     break;
+                    
+                case 'updateTemplateConfig':
+                    Object.assign(this.templateConfig, request.config);
+                    chrome.storage.local.set({ templateConfig: this.templateConfig });
+                    sendResponse({ success: true });
+                    break;
+                    
+                case 'getQueue':
+                    sendResponse({
+                        success: true,
+                        queue: this.appealQueue.map(item => ({
+                            appealId: item.appealId,
+                            timestamp: item.timestamp,
+                            retryCount: item.retryCount || 0,
+                            status: this.appealQueue.indexOf(item) === 0 ? 'processing' : 'pending'
+                        }))
+                    });
+                    break;
+
+                case 'checkAppeals':
+                    this.checkForExistingAppeals();
+                    sendResponse({
+                        success: true,
+                        count: this.appealQueue.length
+                    });
+                    break;
+
+                case 'processManual':
+                    if (request.appealId) {
+                        this.addAppealToQueue({
+                            appealId: request.appealId,
+                            timestamp: Date.now(),
+                            manual: true
+                        });
+                        sendResponse({ success: true });
+                    } else {
+                        sendResponse({ success: false, error: 'No appeal ID provided' });
+                    }
+                    break;
+
+                case 'clearQueue':
+                    this.appealQueue = [];
+                    this.isProcessingQueue = false;
+                    sendResponse({ success: true });
+                    break;
+
+                case 'getProcessingHistory':
+                    chrome.storage.local.get(['processedAppeals'], (result) => {
+                        sendResponse({
+                            success: true,
+                            history: result.processedAppeals || []
+                        });
+                    });
+                    return true; // Keep channel open for async response
+
+                case 'getDetailedStats':
+                    // Calculate success rate
+                    chrome.storage.local.get(['processedAppeals', 'recentActivity'], (result) => {
+                        const processed = result.processedAppeals || [];
+                        const recent = result.recentActivity || [];
+                        
+                        const successCount = recent.filter(a => a.success).length;
+                        const failCount = recent.filter(a => !a.success).length;
+                        
+                        sendResponse({
+                            success: true,
+                            stats: {
+                                dialogIdsCount: this.dialogIds.size,
+                                appealIdsCount: this.appealIds.size,
+                                networkLogCount: this.networkLog.length,
+                                autoResponseEnabled: this.autoResponseEnabled,
+                                currentUrl: window.location.href,
+                                processedAppeals: this.processedAppeals.size,
+                                queueLength: this.appealQueue.length,
+                                isProcessing: this.isProcessingQueue,
+                                successCount: successCount,
+                                failCount: failCount,
+                                totalProcessed: processed.length,
+                                avgResponseTime: this.calculateAvgResponseTime(recent)
+                            }
+                        });
+                    });
+                    return true;
                     
                 default:
                     sendResponse({ success: false, error: 'Unknown action' });
@@ -830,20 +1060,13 @@ class OmniChatTrafficAnalyzer {
                 if (mutation.type === 'childList') {
                     mutation.addedNodes.forEach((node) => {
                         if (node.nodeType === Node.ELEMENT_NODE) {
-                            // Check for new message elements
-                            if (this.isMessageElement(node)) {
-                                this.checkForNewMessage(node);
-                            }
-                            
-                            // Check for input fields
-                            this.checkForChatElements(node);
+                            this.checkForNewAppeal(node);
                         }
                     });
                 }
             });
         });
         
-        // Start observing when DOM is ready
         if (document.body) {
             observer.observe(document.body, {
                 childList: true,
@@ -855,127 +1078,232 @@ class OmniChatTrafficAnalyzer {
         }
     }
 
-    isMessageElement(element) {
-        const classNames = element.className || '';
-        const id = element.id || '';
+    calculateAvgResponseTime(activities) {
+        if (!activities || activities.length === 0) return 0;
         
-        const messageIndicators = [
-            'message', 'msg', 'chat-item', 'chat-message',
-            'bubble', 'text-wrapper', 'content-wrapper'
-        ];
+        const times = activities
+            .filter(a => a.responseTime)
+            .map(a => a.responseTime);
         
-        return messageIndicators.some(indicator => 
-            classNames.toLowerCase().includes(indicator) || 
-            id.toLowerCase().includes(indicator)
-        );
+        if (times.length === 0) return 0;
+        
+        const avg = times.reduce((a, b) => a + b, 0) / times.length;
+        return Math.round(avg / 1000); // Convert to seconds
     }
 
-    checkForNewMessage(element) {
-        // Extract text content
-        const text = element.textContent || element.innerText;
-        if (!text || text.trim().length < 2) return;
-        
-        // Check if it's an incoming message by looking for indicators
-        const isIncoming = 
-            element.classList.contains('incoming') ||
-            element.classList.contains('received') ||
-            element.classList.contains('client') ||
-            element.classList.contains('user') ||
-            element.getAttribute('data-author') === 'client' ||
-            element.getAttribute('data-direction') === 'incoming';
-        
-        if (isIncoming) {
-            console.log('📨 New incoming message detected via DOM');
+    saveRecentActivity(activity) {
+        chrome.storage.local.get(['recentActivity'], (result) => {
+            const activities = result.recentActivity || [];
+            activities.push(activity);
             
-            // Try to find dialogId from page context
-            const dialogId = this.extractDialogIdFromPage() || Array.from(this.dialogIds.keys()).pop();
+            // Keep only last 50 activities
+            const trimmed = activities.slice(-50);
             
-            if (dialogId) {
-                this.handleIncomingMessage({ 
-                    dialogId: dialogId, 
-                    text: text,
-                    source: 'dom-observation' 
-                });
-            }
-        }
-    }
-
-    checkForChatElements(element) {
-        // Look for input fields
-        const inputs = element.querySelectorAll ? 
-            element.querySelectorAll('textarea, input[type="text"], [contenteditable="true"]') : [];
-            
-        inputs.forEach(input => {
-            if (this.isMessageInput(input) && !input._omniMonitored) {
-                input._omniMonitored = true;
-                console.log('🎯 Found new message input:', input);
-                
-                // Add listeners
-                input.addEventListener('focus', () => {
-                    console.log('✍️ Input focused');
-                    this.ensureAutoResponseReady();
-                });
-            }
-        });
-        
-        // Look for send buttons
-        const buttons = element.querySelectorAll ? 
-            element.querySelectorAll('button') : [];
-            
-        buttons.forEach(button => {
-            const btnText = (button.textContent + button.title + button.getAttribute('aria-label')).toLowerCase();
-            if ((btnText.includes('send') || btnText.includes('отправ')) && !button._omniMonitored) {
-                button._omniMonitored = true;
-                console.log('🎯 Found send button:', button);
-            }
+            chrome.storage.local.set({ recentActivity: trimmed });
         });
     }
 
     exposeDebugInterface() {
         window.omniAnalyzer = {
+            // Core functions
             getDialogIds: () => Array.from(this.dialogIds.values()),
+            getAppealIds: () => Array.from(this.appealIds.values()),
             getNetworkLog: () => this.networkLog,
-            getSentResponses: () => Array.from(this.sentResponses),
-            testAutoResponse: (dialogId) => {
-                const id = dialogId || Array.from(this.dialogIds.keys()).pop();
-                if (id) {
-                    this.sendAutoResponse(id, 'test-' + Date.now());
-                    return 'Testing auto-response for dialogId: ' + id;
-                }
-                return 'No dialogId available';
+            getProcessedAppeals: () => Array.from(this.processedAppeals),
+            getQueue: () => this.appealQueue,
+            
+            // Testing functions
+            testAutoResponse: () => {
+                console.log('🧪 Testing auto-response...');
+                this.checkForExistingAppeals();
+                return 'Checking for appeals...';
             },
+            
+            simulateAppeal: (appealId) => {
+                const simulatedAppeal = {
+                    appealId: appealId || 'SIM-' + Date.now(),
+                    timestamp: Date.now(),
+                    simulated: true
+                };
+                
+                // Create fake DOM element
+                const fakeElement = document.createElement('div');
+                fakeElement.className = 'appeal-item unread';
+                fakeElement.dataset.appealId = simulatedAppeal.appealId;
+                fakeElement.textContent = `Simulated Appeal ${simulatedAppeal.appealId}`;
+                
+                console.log('🎭 Simulating new appeal:', simulatedAppeal.appealId);
+                this.checkForNewAppeal(fakeElement);
+                return 'Simulated appeal: ' + simulatedAppeal.appealId;
+            },
+            
+            processManual: (appealId) => {
+                const appeal = {
+                    appealId: appealId || 'test-' + Date.now(),
+                    timestamp: Date.now(),
+                    manual: true
+                };
+                this.addAppealToQueue(appeal);
+                return 'Added to queue: ' + appeal.appealId;
+            },
+            
+            // Control functions
             toggleAutoResponse: () => {
                 this.autoResponseEnabled = !this.autoResponseEnabled;
                 console.log('Auto-response:', this.autoResponseEnabled ? 'ON' : 'OFF');
+                chrome.storage.local.set({ autoResponseEnabled: this.autoResponseEnabled });
                 return this.autoResponseEnabled;
             },
-            testDOMSend: (text) => {
-                return this.sendViaDOM(text || 'Test message from DOM method');
+            
+            clearQueue: () => {
+                this.appealQueue = [];
+                this.isProcessingQueue = false;
+                return 'Queue cleared';
             },
-            extractDialogId: () => {
-                return this.extractDialogIdFromPage();
+            
+            pauseProcessing: () => {
+                this.isProcessingQueue = false;
+                return 'Processing paused';
             },
+            
+            resumeProcessing: () => {
+                if (this.appealQueue.length > 0) {
+                    this.processQueue();
+                    return 'Processing resumed';
+                }
+                return 'Queue is empty';
+            },
+            
+            // Configuration
+            getConfig: () => this.templateConfig,
+            
+            updateConfig: (config) => {
+                Object.assign(this.templateConfig, config);
+                chrome.storage.local.set({ templateConfig: this.templateConfig });
+                return 'Config updated';
+            },
+            
+            // Statistics
             getStats: () => ({
                 dialogIds: this.dialogIds.size,
                 appealIds: this.appealIds.size,
                 networkEvents: this.networkLog.length,
-                sentResponses: this.sentResponses.size,
+                processedAppeals: this.processedAppeals.size,
+                queueLength: this.appealQueue.length,
+                isProcessing: this.isProcessingQueue,
                 autoResponse: this.autoResponseEnabled,
-                lastDialogId: Array.from(this.dialogIds.keys()).pop()
-            })
+                config: this.templateConfig
+            }),
+            
+            getDetailedStats: () => {
+                const stats = this.getStats();
+                
+                // Add queue details
+                stats.queueDetails = this.appealQueue.map((item, index) => ({
+                    position: index + 1,
+                    appealId: item.appealId,
+                    waitTime: Date.now() - item.timestamp,
+                    retries: item.retryCount || 0
+                }));
+                
+                // Add processing rate
+                const processedArray = Array.from(this.processedAppeals);
+                const lastHour = Date.now() - 3600000;
+                stats.lastHourProcessed = processedArray.filter(id => {
+                    const item = this.appealIds.get(id);
+                    return item && item.firstSeen > lastHour;
+                }).length;
+                
+                return stats;
+            },
+            
+            // DOM inspection
+            findElements: () => {
+                const elements = {
+                    appeals: document.querySelectorAll('.appeal-item, .chat-item, .dialog-item'),
+                    templateButton: document.querySelector('button[title*="шаблон"], button[title*="template"]'),
+                    sendButton: document.querySelector('button[title*="отправ"], button[title*="send"]'),
+                    messageInput: document.querySelector('textarea, [contenteditable="true"]')
+                };
+                
+                console.log('🔍 Found elements:', {
+                    appeals: elements.appeals.length,
+                    templateButton: !!elements.templateButton,
+                    sendButton: !!elements.sendButton,
+                    messageInput: !!elements.messageInput
+                });
+                
+                return elements;
+            },
+            
+            // Testing specific steps
+            testSelectAppeal: async (appealId) => {
+                const appeal = { appealId: appealId || this.appealQueue[0]?.appealId };
+                if (!appeal.appealId) return 'No appeal to test';
+                
+                const result = await this.selectAppeal(appeal);
+                return result ? 'Successfully selected appeal' : 'Failed to select appeal';
+            },
+            
+            testOpenTemplate: async () => {
+                const result = await this.openTemplateSelector();
+                return result ? 'Template selector opened' : 'Failed to open template selector';
+            },
+            
+            testSelectTemplate: async () => {
+                const result = await this.selectTemplate();
+                return result ? 'Template selected' : 'Failed to select template';
+            },
+            
+            testSendMessage: async () => {
+                const result = await this.sendTemplateMessage();
+                return result ? 'Message sent' : 'Failed to send message';
+            },
+            
+            // Help
+            help: () => {
+                console.log('🛠️ OmniChat Analyzer Commands:');
+                console.log('');
+                console.log('📊 MONITORING:');
+                console.log('  omniAnalyzer.getStats() - Basic statistics');
+                console.log('  omniAnalyzer.getDetailedStats() - Detailed statistics');
+                console.log('  omniAnalyzer.getQueue() - View current queue');
+                console.log('  omniAnalyzer.findElements() - Find DOM elements');
+                console.log('');
+                console.log('🎮 CONTROL:');
+                console.log('  omniAnalyzer.toggleAutoResponse() - Toggle auto-response');
+                console.log('  omniAnalyzer.pauseProcessing() - Pause queue processing');
+                console.log('  omniAnalyzer.resumeProcessing() - Resume queue processing');
+                console.log('  omniAnalyzer.clearQueue() - Clear processing queue');
+                console.log('');
+                console.log('🧪 TESTING:');
+                console.log('  omniAnalyzer.testAutoResponse() - Check for new appeals');
+                console.log('  omniAnalyzer.simulateAppeal(id) - Simulate new appeal');
+                console.log('  omniAnalyzer.processManual(id) - Manually process appeal');
+                console.log('  omniAnalyzer.testSelectAppeal(id) - Test appeal selection');
+                console.log('  omniAnalyzer.testOpenTemplate() - Test template opening');
+                console.log('  omniAnalyzer.testSelectTemplate() - Test template selection');
+                console.log('  omniAnalyzer.testSendMessage() - Test message sending');
+                console.log('');
+                console.log('⚙️ CONFIGURATION:');
+                console.log('  omniAnalyzer.getConfig() - Get current config');
+                console.log('  omniAnalyzer.updateConfig({...}) - Update config');
+                console.log('');
+                console.log('💾 DATA:');
+                console.log('  omniAnalyzer.getDialogIds() - Get all dialog IDs');
+                console.log('  omniAnalyzer.getAppealIds() - Get all appeal IDs');
+                console.log('  omniAnalyzer.getProcessedAppeals() - Get processed appeals');
+                console.log('  omniAnalyzer.getNetworkLog() - Get network log');
+            }
         };
         
         console.log('🛠️ Debug interface available at: window.omniAnalyzer');
-        console.log('📝 Key commands:');
-        console.log('  - omniAnalyzer.testAutoResponse() - Test auto-response');
-        console.log('  - omniAnalyzer.testDOMSend() - Test DOM sending method');
-        console.log('  - omniAnalyzer.toggleAutoResponse() - Toggle auto-response');
-        console.log('  - omniAnalyzer.getStats() - Get current statistics');
+        console.log('🔧 Type "omniAnalyzer.help()" for available commands');
     }
 }
 
 // Initialize analyzer
 const analyzer = new OmniChatTrafficAnalyzer();
-console.log('✅ OmniChat Traffic Analyzer Enhanced loaded!');
-console.log('🤖 Auto-response system:', analyzer.autoResponseEnabled ? 'ENABLED' : 'DISABLED');
+console.log('✅ OmniChat Traffic Analyzer v4.0 loaded!');
+console.log('🤖 Template-based auto-response:', analyzer.autoResponseEnabled ? 'ENABLED' : 'DISABLED');
 console.log('💡 Use window.omniAnalyzer for debug commands');

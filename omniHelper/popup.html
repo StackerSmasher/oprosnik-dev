@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OmniChat Traffic Analyzer</title>
+    <title>OmniChat Diagnostic Tool</title>
     <style>
         * {
             margin: 0;
@@ -12,74 +12,293 @@
         }
 
         body {
-            width: 450px;
-            min-height: 500px;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            width: 500px;
+            min-height: 600px;
+            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0e27;
+            color: #ffffff;
         }
 
         .container {
-            padding: 20px;
-            background: white;
-            min-height: 500px;
+            height: 600px;
+            display: flex;
+            flex-direction: column;
         }
 
+        /* Header */
         .header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 20px;
-            margin: -20px -20px 20px -20px;
-            text-align: center;
-        }
-
-        .header h1 {
-            font-size: 20px;
-            margin-bottom: 8px;
-        }
-
-        .header p {
-            font-size: 12px;
-            opacity: 0.9;
-        }
-
-        .status-bar {
+            padding: 15px 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 12px;
-            background: #f8f9fa;
-            border-radius: 8px;
-            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
         }
 
-        .status-indicator {
+        .header h1 {
+            font-size: 18px;
+            font-weight: 600;
             display: flex;
             align-items: center;
             gap: 8px;
         }
 
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255,255,255,0.2);
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+        }
+
         .status-dot {
-            width: 10px;
-            height: 10px;
+            width: 8px;
+            height: 8px;
             border-radius: 50%;
-            background: #28a745;
+            background: #4ade80;
             animation: pulse 2s infinite;
         }
 
-        @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.5; }
-            100% { opacity: 1; }
+        .status-dot.inactive {
+            background: #ef4444;
+            animation: none;
         }
 
-        .status-dot.inactive {
-            background: #dc3545;
-            animation: none;
+        .status-dot.processing {
+            background: #fbbf24;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Navigation Tabs */
+        .nav-tabs {
+            display: flex;
+            background: #1a1f3a;
+            border-bottom: 1px solid #2a3050;
+        }
+
+        .nav-tab {
+            flex: 1;
+            padding: 12px;
+            background: none;
+            border: none;
+            color: #8892b0;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+        }
+
+        .nav-tab:hover {
+            color: #ffffff;
+            background: rgba(102, 126, 234, 0.1);
+        }
+
+        .nav-tab.active {
+            color: #667eea;
+            background: rgba(102, 126, 234, 0.15);
+        }
+
+        .nav-tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+        }
+
+        .nav-tab .badge {
+            display: inline-block;
+            margin-left: 5px;
+            padding: 2px 6px;
+            background: #667eea;
+            color: white;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        /* Tab Content */
+        .tab-content {
+            flex: 1;
+            display: none;
+            overflow-y: auto;
+            background: #0f1729;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Dashboard Tab */
+        .dashboard {
+            padding: 20px;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .metric-card {
+            background: linear-gradient(135deg, #1a1f3a 0%, #252b4a 100%);
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid #2a3050;
+        }
+
+        .metric-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .metric-label {
+            font-size: 12px;
+            color: #8892b0;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .metric-change {
+            font-size: 11px;
+            color: #4ade80;
+            margin-top: 5px;
+        }
+
+        .metric-change.negative {
+            color: #ef4444;
+        }
+
+        /* Queue Section */
+        .queue-section {
+            background: #1a1f3a;
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 20px;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        .queue-item {
+            background: #0f1729;
+            border: 1px solid #2a3050;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.3s;
+        }
+
+        .queue-item:hover {
+            border-color: #667eea;
+            transform: translateX(5px);
+        }
+
+        .queue-item-info {
+            flex: 1;
+        }
+
+        .queue-item-id {
+            font-size: 13px;
+            color: #ffffff;
+            font-weight: 500;
+        }
+
+        .queue-item-time {
+            font-size: 11px;
+            color: #8892b0;
+            margin-top: 3px;
+        }
+
+        .queue-item-status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .queue-item-status.pending {
+            background: rgba(251, 191, 36, 0.2);
+            color: #fbbf24;
+        }
+
+        .queue-item-status.processing {
+            background: rgba(59, 130, 246, 0.2);
+            color: #3b82f6;
+        }
+
+        .queue-item-status.completed {
+            background: rgba(74, 222, 128, 0.2);
+            color: #4ade80;
+        }
+
+        .queue-item-status.failed {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+
+        /* Control Panel */
+        .control-panel {
+            padding: 20px;
+        }
+
+        .control-group {
+            margin-bottom: 20px;
+        }
+
+        .control-label {
+            font-size: 12px;
+            color: #8892b0;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 10px;
+            display: block;
+        }
+
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #1a1f3a;
+            padding: 12px 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+
+        .toggle-label {
+            font-size: 14px;
+            color: #ffffff;
         }
 
         .toggle-switch {
             position: relative;
-            width: 50px;
+            width: 48px;
             height: 24px;
         }
 
@@ -96,7 +315,7 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background-color: #ccc;
+            background-color: #2a3050;
             transition: .4s;
             border-radius: 24px;
         }
@@ -114,110 +333,43 @@
         }
 
         input:checked + .toggle-slider {
-            background-color: #667eea;
+            background: linear-gradient(90deg, #667eea, #764ba2);
         }
 
         input:checked + .toggle-slider:before {
-            transform: translateX(26px);
+            transform: translateX(24px);
         }
 
-        .tabs {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-            border-bottom: 2px solid #f0f0f0;
+        .input-group {
+            margin-bottom: 15px;
         }
 
-        .tab {
-            padding: 10px 20px;
-            cursor: pointer;
-            background: none;
-            border: none;
-            color: #666;
-            font-size: 14px;
-            font-weight: 500;
-            position: relative;
-            transition: color 0.3s;
-        }
-
-        .tab.active {
-            color: #667eea;
-        }
-
-        .tab.active::after {
-            content: '';
-            position: absolute;
-            bottom: -2px;
-            left: 0;
-            right: 0;
-            height: 2px;
-            background: #667eea;
-        }
-
-        .tab-content {
-            display: none;
-        }
-
-        .tab-content.active {
+        .input-label {
+            font-size: 12px;
+            color: #8892b0;
+            margin-bottom: 5px;
             display: block;
         }
 
-        .dialog-item {
-            background: #f8f9fa;
-            border: 1px solid #e9ecef;
-            border-radius: 8px;
-            padding: 12px;
-            margin-bottom: 10px;
-            transition: transform 0.2s, box-shadow 0.2s;
+        .input-field {
+            width: 100%;
+            padding: 10px;
+            background: #1a1f3a;
+            border: 1px solid #2a3050;
+            border-radius: 6px;
+            color: #ffffff;
+            font-size: 14px;
         }
 
-        .dialog-item:hover {
-            transform: translateX(5px);
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        .input-field:focus {
+            outline: none;
+            border-color: #667eea;
         }
 
-        .dialog-id {
-            font-size: 16px;
-            font-weight: 600;
-            color: #333;
-            margin-bottom: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-
-        .copy-btn {
-            background: #667eea;
-            color: white;
-            border: none;
-            padding: 4px 10px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            transition: background 0.3s;
-        }
-
-        .copy-btn:hover {
-            background: #5a67d8;
-        }
-
-        .dialog-meta {
-            display: flex;
-            gap: 15px;
-            font-size: 12px;
-            color: #666;
-        }
-
-        .dialog-meta span {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-
-        .action-buttons {
+        .btn-group {
             display: flex;
             gap: 10px;
-            margin-bottom: 20px;
+            margin-bottom: 15px;
         }
 
         .btn {
@@ -225,577 +377,1211 @@
             padding: 10px;
             border: none;
             border-radius: 6px;
-            font-size: 14px;
+            font-size: 13px;
             font-weight: 500;
             cursor: pointer;
             transition: all 0.3s;
         }
 
         .btn-primary {
-            background: #667eea;
+            background: linear-gradient(135deg, #667eea, #764ba2);
             color: white;
         }
 
         .btn-primary:hover {
-            background: #5a67d8;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #1a1f3a;
+            color: #8892b0;
+            border: 1px solid #2a3050;
+        }
+
+        .btn-secondary:hover {
+            background: #252b4a;
+            color: #ffffff;
         }
 
         .btn-danger {
-            background: #dc3545;
+            background: #ef4444;
             color: white;
         }
 
         .btn-danger:hover {
-            background: #c82333;
+            background: #dc2626;
         }
 
-        .btn-secondary {
-            background: #6c757d;
-            color: white;
-        }
-
-        .btn-secondary:hover {
-            background: #5a6268;
-        }
-
-        .empty-state {
-            text-align: center;
-            padding: 40px;
-            color: #666;
-        }
-
-        .empty-state svg {
-            width: 60px;
-            height: 60px;
-            margin-bottom: 20px;
-            opacity: 0.3;
-        }
-
-        .stats-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-
-        .stat-card {
-            background: #f8f9fa;
+        /* Logs Tab */
+        .logs-container {
             padding: 15px;
-            border-radius: 8px;
-            text-align: center;
+            font-family: 'Fira Code', 'Courier New', monospace;
         }
 
-        .stat-value {
-            font-size: 24px;
-            font-weight: bold;
-            color: #667eea;
-        }
-
-        .stat-label {
-            font-size: 12px;
-            color: #666;
-            margin-top: 5px;
-        }
-
-        .network-log-item {
-            background: #f8f9fa;
-            border-left: 3px solid #667eea;
-            padding: 10px;
-            margin-bottom: 8px;
-            font-size: 12px;
-            font-family: 'Courier New', monospace;
-        }
-
-        .log-header {
+        .log-filters {
             display: flex;
-            justify-content: space-between;
-            margin-bottom: 5px;
-            font-weight: 600;
+            gap: 10px;
+            margin-bottom: 15px;
         }
 
-        .log-url {
-            color: #666;
+        .filter-btn {
+            padding: 6px 12px;
+            background: #1a1f3a;
+            border: 1px solid #2a3050;
+            border-radius: 4px;
+            color: #8892b0;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .filter-btn.active {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+
+        .log-entry {
+            padding: 8px 12px;
+            margin-bottom: 4px;
+            border-radius: 4px;
+            font-size: 12px;
+            line-height: 1.5;
             word-break: break-all;
         }
 
-        #notification {
+        .log-entry.info {
+            background: rgba(59, 130, 246, 0.1);
+            border-left: 3px solid #3b82f6;
+        }
+
+        .log-entry.success {
+            background: rgba(74, 222, 128, 0.1);
+            border-left: 3px solid #4ade80;
+        }
+
+        .log-entry.warning {
+            background: rgba(251, 191, 36, 0.1);
+            border-left: 3px solid #fbbf24;
+        }
+
+        .log-entry.error {
+            background: rgba(239, 68, 68, 0.1);
+            border-left: 3px solid #ef4444;
+        }
+
+        .log-time {
+            color: #8892b0;
+            font-size: 11px;
+        }
+
+        .log-message {
+            color: #ffffff;
+            margin-top: 2px;
+        }
+
+        /* Config Tab */
+        .config-container {
+            padding: 20px;
+        }
+
+        .config-section {
+            background: #1a1f3a;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .config-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #2a3050;
+        }
+
+        .slider-group {
+            margin-bottom: 20px;
+        }
+
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 13px;
+            color: #8892b0;
+            margin-bottom: 8px;
+        }
+
+        .slider-value {
+            color: #667eea;
+            font-weight: 600;
+        }
+
+        .slider {
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: #2a3050;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            cursor: pointer;
+        }
+
+        .slider::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            cursor: pointer;
+        }
+
+        /* History Tab */
+        .history-container {
+            padding: 15px;
+        }
+
+        .history-item {
+            background: #1a1f3a;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+            border: 1px solid #2a3050;
+            transition: all 0.3s;
+        }
+
+        .history-item:hover {
+            border-color: #667eea;
+        }
+
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .history-id {
+            font-size: 14px;
+            color: #ffffff;
+            font-weight: 500;
+        }
+
+        .history-time {
+            font-size: 11px;
+            color: #8892b0;
+        }
+
+        .history-details {
+            font-size: 12px;
+            color: #8892b0;
+            display: flex;
+            gap: 15px;
+        }
+
+        .history-detail {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #8892b0;
+        }
+
+        .empty-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+            opacity: 0.5;
+        }
+
+        .empty-message {
+            font-size: 14px;
+        }
+
+        /* Notifications */
+        .notification {
             position: fixed;
             top: 20px;
             right: 20px;
-            background: #28a745;
-            color: white;
             padding: 12px 20px;
-            border-radius: 6px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            border-radius: 8px;
+            color: white;
+            font-size: 13px;
+            font-weight: 500;
             transform: translateX(400px);
             transition: transform 0.3s;
             z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
         }
 
-        #notification.show {
+        .notification.show {
             transform: translateX(0);
+        }
+
+        .notification.success {
+            background: linear-gradient(135deg, #4ade80, #22c55e);
+        }
+
+        .notification.error {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+        }
+
+        .notification.info {
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+        }
+
+        /* Loading Spinner */
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #2a3050;
+            border-radius: 50%;
+            border-top-color: #667eea;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Scrollbar Styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #0a0e27;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #2a3050;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #3a4060;
         }
     </style>
 </head>
 <body>
     <div class="container">
+        <!-- Header -->
         <div class="header">
-            <h1>🔍 OmniChat Traffic Analyzer</h1>
-            <p>Анализатор трафика и автоответчик</p>
-        </div>
-
-        <div class="status-bar">
-            <div class="status-indicator">
+            <h1>
+                <span>🔬</span>
+                OmniChat Diagnostic Tool
+            </h1>
+            <div class="status-badge">
                 <div class="status-dot" id="statusDot"></div>
-                <span id="statusText">Активно</span>
-            </div>
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <span style="font-size: 12px;">Автоответ:</span>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="autoResponseToggle" checked>
-                    <span class="toggle-slider"></span>
-                </label>
+                <span id="statusText">Initializing...</span>
             </div>
         </div>
 
-        <div class="tabs">
-            <button class="tab active" data-tab="dialogs">Dialog IDs</button>
-            <button class="tab" data-tab="appeals">Appeal IDs</button>
-            <button class="tab" data-tab="stats">Статистика</button>
-            <button class="tab" data-tab="network">Сеть</button>
+        <!-- Navigation -->
+        <div class="nav-tabs">
+            <button class="nav-tab active" data-tab="dashboard">
+                Dashboard
+                <span class="badge" id="queueBadge" style="display:none;">0</span>
+            </button>
+            <button class="nav-tab" data-tab="control">
+                Control
+            </button>
+            <button class="nav-tab" data-tab="logs">
+                Logs
+                <span class="badge" id="logsBadge" style="display:none;">0</span>
+            </button>
+            <button class="nav-tab" data-tab="config">
+                Config
+            </button>
+            <button class="nav-tab" data-tab="history">
+                History
+            </button>
         </div>
 
-        <div class="tab-content active" id="dialogsTab">
-            <div class="action-buttons">
-                <button class="btn btn-primary" id="refreshBtn">🔄 Обновить</button>
-                <button class="btn btn-secondary" id="exportBtn">📥 Экспорт</button>
-                <button class="btn btn-danger" id="clearBtn">🗑️ Очистить</button>
-            </div>
-            
-            <div id="dialogsList">
-                <div class="empty-state">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <line x1="12" y1="16" x2="12" y2="12"></line>
-                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                    </svg>
-                    <p>Нет найденных Dialog ID</p>
-                    <small>Откройте OmniChat для начала отслеживания</small>
+        <!-- Tab Contents -->
+        
+        <!-- Dashboard Tab -->
+        <div class="tab-content active" id="dashboardTab">
+            <div class="dashboard">
+                <!-- Metrics Grid -->
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-value" id="processedCount">0</div>
+                        <div class="metric-label">Processed Appeals</div>
+                        <div class="metric-change" id="processedChange">+0 today</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="queueLength">0</div>
+                        <div class="metric-label">Queue Length</div>
+                        <div class="metric-change" id="queueChange">0 pending</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="successRate">0%</div>
+                        <div class="metric-label">Success Rate</div>
+                        <div class="metric-change" id="successChange">Last 24h</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="avgResponseTime">0s</div>
+                        <div class="metric-label">Avg Response Time</div>
+                        <div class="metric-change" id="responseChange">-0.5s</div>
+                    </div>
+                </div>
+
+                <!-- Current Queue -->
+                <div class="queue-section">
+                    <div class="section-header">
+                        <div class="section-title">Current Queue</div>
+                        <button class="btn btn-secondary" style="padding: 5px 10px; font-size: 12px;" onclick="refreshQueue()">
+                            🔄 Refresh
+                        </button>
+                    </div>
+                    <div id="queueList">
+                        <div class="empty-state">
+                            <div class="empty-icon">📭</div>
+                            <div class="empty-message">No appeals in queue</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Activity -->
+                <div class="queue-section" style="margin-top: 15px;">
+                    <div class="section-header">
+                        <div class="section-title">Recent Activity</div>
+                    </div>
+                    <div id="recentActivity">
+                        <div class="empty-state">
+                            <div class="empty-icon">🕐</div>
+                            <div class="empty-message">No recent activity</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <div class="tab-content" id="appealsTab">
-            <div class="action-buttons">
-                <button class="btn btn-primary" id="refreshAppealsBtn">🔄 Обновить</button>
-                <button class="btn btn-secondary" id="createDialogBtn">➕ Создать Dialog</button>
-            </div>
-            
-            <div id="appealsList">
-                <div class="empty-state">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <line x1="12" y1="16" x2="12" y2="12"></line>
-                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                    </svg>
-                    <p>Нет найденных Appeal ID</p>
-                    <small>Откройте чат с обращением</small>
+        <!-- Control Tab -->
+        <div class="tab-content" id="controlTab">
+            <div class="control-panel">
+                <!-- Auto Response Toggle -->
+                <div class="control-group">
+                    <label class="control-label">Auto Response System</label>
+                    <div class="toggle-container">
+                        <span class="toggle-label">Enable Auto Response</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="autoResponseToggle" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Quick Actions -->
+                <div class="control-group">
+                    <label class="control-label">Quick Actions</label>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" onclick="testAutoResponse()">
+                            🧪 Test Response
+                        </button>
+                        <button class="btn btn-secondary" onclick="checkAppeals()">
+                            🔍 Check Appeals
+                        </button>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-secondary" onclick="clearQueue()">
+                            🧹 Clear Queue
+                        </button>
+                        <button class="btn btn-danger" onclick="clearAllData()">
+                            🗑️ Reset All
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Manual Processing -->
+                <div class="control-group">
+                    <label class="control-label">Manual Processing</label>
+                    <div class="input-group">
+                        <label class="input-label">Appeal ID</label>
+                        <input type="text" class="input-field" id="manualAppealId" placeholder="Enter appeal ID...">
+                    </div>
+                    <button class="btn btn-primary" onclick="processManualAppeal()">
+                        ▶️ Process Appeal
+                    </button>
+                </div>
+
+                <!-- Debug Mode -->
+                <div class="control-group">
+                    <label class="control-label">Debug Options</label>
+                    <div class="toggle-container">
+                        <span class="toggle-label">Verbose Logging</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="verboseLogging">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="toggle-container">
+                        <span class="toggle-label">Dry Run Mode</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="dryRunMode">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Export/Import -->
+                <div class="control-group">
+                    <label class="control-label">Data Management</label>
+                    <div class="btn-group">
+                        <button class="btn btn-secondary" onclick="exportData()">
+                            📥 Export Data
+                        </button>
+                        <button class="btn btn-secondary" onclick="importData()">
+                            📤 Import Data
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <div class="tab-content" id="statsTab">
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-value" id="totalDialogs">0</div>
-                    <div class="stat-label">Dialog IDs</div>
+        <!-- Logs Tab -->
+        <div class="tab-content" id="logsTab">
+            <div class="logs-container">
+                <div class="log-filters">
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="info">Info</button>
+                    <button class="filter-btn" data-filter="success">Success</button>
+                    <button class="filter-btn" data-filter="warning">Warning</button>
+                    <button class="filter-btn" data-filter="error">Error</button>
+                    <button class="btn btn-secondary" style="margin-left: auto;" onclick="clearLogs()">
+                        Clear Logs
+                    </button>
                 </div>
-                <div class="stat-card">
-                    <div class="stat-value" id="totalAppeals">0</div>
-                    <div class="stat-label">Appeal IDs</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value" id="networkEvents">0</div>
-                    <div class="stat-label">Сетевых событий</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value" id="uptime">0m</div>
-                    <div class="stat-label">Время работы</div>
+                <div id="logsList">
+                    <div class="empty-state">
+                        <div class="empty-icon">📜</div>
+                        <div class="empty-message">No logs available</div>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <div class="tab-content" id="networkTab">
-            <div id="networkLog">
-                <div class="empty-state">
-                    <p>Нет сетевых событий</p>
+        <!-- Config Tab -->
+        <div class="tab-content" id="configTab">
+            <div class="config-container">
+                <!-- Template Configuration -->
+                <div class="config-section">
+                    <div class="config-title">Template Configuration</div>
+                    
+                    <div class="input-group">
+                        <label class="input-label">Template Text</label>
+                        <input type="text" class="input-field" id="templateText" 
+                               value="Запрос принят в работу">
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-label">
+                            Response Delay
+                            <span class="slider-value" id="responseDelayValue">2000ms</span>
+                        </div>
+                        <input type="range" class="slider" id="responseDelay" 
+                               min="500" max="10000" step="500" value="2000">
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-label">
+                            Click Delay
+                            <span class="slider-value" id="clickDelayValue">500ms</span>
+                        </div>
+                        <input type="range" class="slider" id="clickDelay" 
+                               min="100" max="2000" step="100" value="500">
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-label">
+                            Max Retries
+                            <span class="slider-value" id="maxRetriesValue">3</span>
+                        </div>
+                        <input type="range" class="slider" id="maxRetries" 
+                               min="1" max="5" step="1" value="3">
+                    </div>
+                </div>
+
+                <!-- Selectors Configuration -->
+                <div class="config-section">
+                    <div class="config-title">Custom Selectors</div>
+                    
+                    <div class="input-group">
+                        <label class="input-label">Appeal Selector</label>
+                        <input type="text" class="input-field" id="appealSelector" 
+                               placeholder=".appeal-item, .chat-item">
+                    </div>
+
+                    <div class="input-group">
+                        <label class="input-label">Template Button Selector</label>
+                        <input type="text" class="input-field" id="templateButtonSelector" 
+                               placeholder="button[title*='template']">
+                    </div>
+
+                    <div class="input-group">
+                        <label class="input-label">Send Button Selector</label>
+                        <input type="text" class="input-field" id="sendButtonSelector" 
+                               placeholder="button[title*='send']">
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" onclick="saveConfig()">
+                    💾 Save Configuration
+                </button>
+            </div>
+        </div>
+
+        <!-- History Tab -->
+        <div class="tab-content" id="historyTab">
+            <div class="history-container">
+                <div class="section-header" style="margin-bottom: 15px;">
+                    <div class="section-title">Processing History</div>
+                    <button class="btn btn-secondary" style="padding: 5px 10px; font-size: 12px;" onclick="clearHistory()">
+                        Clear History
+                    </button>
+                </div>
+                <div id="historyList">
+                    <div class="empty-state">
+                        <div class="empty-icon">📚</div>
+                        <div class="empty-message">No processing history</div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <div id="notification">Скопировано!</div>
+    <!-- Notification -->
+    <div class="notification" id="notification"></div>
 
     <script>
-        // Popup JavaScript
-        let currentTab = 'dialogs';
-        let startTime = Date.now();
+        // State Management
+        let currentTab = 'dashboard';
+        let logs = [];
+        let stats = {};
+        let config = {};
+        let autoRefreshInterval;
 
+        // Initialize
         document.addEventListener('DOMContentLoaded', function() {
             initializeTabs();
-            loadData();
-            setInterval(updateUptime, 1000);
-            
-            // Event listeners
-            document.getElementById('autoResponseToggle').addEventListener('change', toggleAutoResponse);
-            document.getElementById('refreshBtn').addEventListener('click', loadData);
-            document.getElementById('clearBtn').addEventListener('click', clearData);
-            document.getElementById('exportBtn').addEventListener('click', exportData);
-            document.getElementById('refreshAppealsBtn').addEventListener('click', loadData);
-            document.getElementById('createDialogBtn').addEventListener('click', createDialogForCurrentAppeal);
+            loadInitialData();
+            setupEventListeners();
+            startAutoRefresh();
         });
 
+        // Tab Management
         function initializeTabs() {
-            document.querySelectorAll('.tab').forEach(tab => {
+            document.querySelectorAll('.nav-tab').forEach(tab => {
                 tab.addEventListener('click', function() {
-                    const tabName = this.dataset.tab;
-                    switchTab(tabName);
+                    switchTab(this.dataset.tab);
                 });
             });
         }
 
         function switchTab(tabName) {
+            currentTab = tabName;
+            
             // Update tabs
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
             document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
             
             // Update content
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             document.getElementById(tabName + 'Tab').classList.add('active');
             
-            currentTab = tabName;
-            
-            // Load data for the current tab
-            if (tabName === 'network') {
-                loadNetworkLog();
-            } else if (tabName === 'stats') {
-                loadStats();
-            } else if (tabName === 'appeals') {
-                loadAppeals();
+            // Load tab-specific data
+            switch(tabName) {
+                case 'dashboard':
+                    refreshDashboard();
+                    break;
+                case 'logs':
+                    refreshLogs();
+                    break;
+                case 'config':
+                    loadConfig();
+                    break;
+                case 'history':
+                    loadHistory();
+                    break;
             }
         }
 
-        function loadData() {
+        // Data Loading
+        function loadInitialData() {
             chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
                 if (!tabs[0]) return;
                 
-                chrome.tabs.sendMessage(tabs[0].id, {action: 'getDialogIds'}, function(response) {
-                    if (chrome.runtime.lastError) {
-                        console.log('Error:', chrome.runtime.lastError);
-                        // Try loading from storage
-                        loadFromStorage();
-                    } else if (response && response.success) {
-                        displayDialogIds(response.dialogIds);
-                        displayAppealIds(response.appealIds || []);
-                    }
-                });
-                
+                // Get initial stats
                 chrome.tabs.sendMessage(tabs[0].id, {action: 'getStats'}, function(response) {
                     if (response && response.success) {
                         updateStats(response.stats);
                     }
                 });
-            });
-        }
-
-        function loadFromStorage() {
-            chrome.storage.local.get(['dialogIds'], function(result) {
-                if (result.dialogIds) {
-                    displayDialogIds(result.dialogIds);
-                }
-            });
-        }
-
-        function displayDialogIds(dialogIds) {
-            const container = document.getElementById('dialogsList');
-            
-            if (!dialogIds || dialogIds.length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <line x1="12" y1="16" x2="12" y2="12"></line>
-                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                        </svg>
-                        <p>Нет найденных Dialog ID</p>
-                        <small>Откройте OmniChat для начала отслеживания</small>
-                    </div>
-                `;
-                return;
-            }
-            
-            // Sort by last seen
-            dialogIds.sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
-            
-            const html = dialogIds.map(item => {
-                const time = new Date(item.lastSeen || item.firstSeen).toLocaleTimeString('ru-RU');
-                const count = item.seenCount || 1;
                 
-                return `
-                    <div class="dialog-item">
-                        <div class="dialog-id">
-                            <span>Dialog ID: <strong>${item.dialogId}</strong></span>
-                            <button class="copy-btn" onclick="copyToClipboard('${item.dialogId}')">📋 Копировать</button>
-                        </div>
-                        <div class="dialog-meta">
-                            <span>🕐 ${time}</span>
-                            <span>📊 ${count} раз</span>
-                            <span>📡 ${item.type || 'unknown'}</span>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-            
-            container.innerHTML = html;
-            document.getElementById('totalDialogs').textContent = dialogIds.length;
-        }
-
-        function loadNetworkLog() {
-            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-                if (!tabs[0]) return;
+                // Load config
+                loadConfig();
                 
-                chrome.tabs.sendMessage(tabs[0].id, {action: 'getNetworkLog'}, function(response) {
-                    if (response && response.success) {
-                        displayNetworkLog(response.networkLog);
-                    }
+                // Load auto-response state
+                chrome.storage.local.get(['autoResponseEnabled'], function(result) {
+                    document.getElementById('autoResponseToggle').checked = result.autoResponseEnabled !== false;
                 });
             });
         }
 
-        function displayNetworkLog(networkLog) {
-            const container = document.getElementById('networkLog');
-            
-            if (!networkLog || networkLog.length === 0) {
-                container.innerHTML = '<div class="empty-state"><p>Нет сетевых событий</p></div>';
-                return;
-            }
-            
-            // Show last 20 events
-            const recentEvents = networkLog.slice(-20).reverse();
-            
-            const html = recentEvents.map(event => {
-                const time = new Date(event.timestamp).toLocaleTimeString('ru-RU');
-                return `
-                    <div class="network-log-item">
-                        <div class="log-header">
-                            <span>${event.type.toUpperCase()} ${event.phase}</span>
-                            <span>${time}</span>
-                        </div>
-                        <div class="log-url">${event.url || event.id}</div>
-                    </div>
-                `;
-            }).join('');
-            
-            container.innerHTML = html;
-        }
-
-        function loadStats() {
+        // Dashboard Functions
+        function refreshDashboard() {
             chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
                 if (!tabs[0]) return;
                 
                 chrome.tabs.sendMessage(tabs[0].id, {action: 'getStats'}, function(response) {
                     if (response && response.success) {
                         updateStats(response.stats);
+                        updateQueue();
+                        updateRecentActivity();
                     }
                 });
             });
         }
 
-        function displayAppealIds(appealIds) {
-            const container = document.getElementById('appealsList');
+        function updateStats(newStats) {
+            stats = newStats;
             
-            if (!appealIds || appealIds.length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <line x1="12" y1="16" x2="12" y2="12"></line>
-                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                        </svg>
-                        <p>Нет найденных Appeal ID</p>
-                        <small>Откройте чат с обращением</small>
-                    </div>
-                `;
-                return;
+            // Update metrics
+            document.getElementById('processedCount').textContent = stats.processedAppeals || 0;
+            document.getElementById('queueLength').textContent = stats.queueLength || 0;
+            
+            // Update queue badge
+            const queueBadge = document.getElementById('queueBadge');
+            if (stats.queueLength > 0) {
+                queueBadge.textContent = stats.queueLength;
+                queueBadge.style.display = 'inline-block';
+            } else {
+                queueBadge.style.display = 'none';
             }
             
-            // Sort by first seen
-            appealIds.sort((a, b) => (b.firstSeen || 0) - (a.firstSeen || 0));
-            
-            const html = appealIds.map(item => {
-                const time = new Date(item.firstSeen).toLocaleTimeString('ru-RU');
-                const hasDialog = item.dialogId ? '✅' : '❌';
-                const dialogStatus = item.dialogId ? `Dialog ID: ${item.dialogId}` : 'Нет Dialog ID';
-                
-                return `
-                    <div class="dialog-item">
-                        <div class="dialog-id">
-                            <span>Appeal ID: <strong>${item.appealId}</strong> ${hasDialog}</span>
-                            <button class="copy-btn" onclick="copyToClipboard('${item.appealId}')">📋 Копировать</button>
-                        </div>
-                        <div class="dialog-meta">
-                            <span>🕐 ${time}</span>
-                            <span>📡 ${item.type || 'unknown'}</span>
-                        </div>
-                        <div style="margin-top: 8px; font-size: 12px; color: ${item.dialogId ? '#28a745' : '#dc3545'};">
-                            ${dialogStatus}
-                            ${!item.dialogId ? '<button class="copy-btn" onclick="createDialogForAppeal(\'' + item.appealId + '\')" style="margin-left: 10px;">🔄 Создать</button>' : ''}
-                        </div>
-                    </div>
-                `;
-            }).join('');
-            
-            container.innerHTML = html;
-            document.getElementById('totalAppeals').textContent = appealIds.length;
-        }
-
-        function loadAppeals() {
-            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-                if (!tabs[0]) return;
-                
-                chrome.tabs.sendMessage(tabs[0].id, {action: 'getDialogIds'}, function(response) {
-                    if (response && response.success) {
-                        displayAppealIds(response.appealIds || []);
-                    }
-                });
-            });
-        }
-
-        function createDialogForCurrentAppeal() {
-            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-                if (!tabs[0]) return;
-                
-                // Extract appealId from current URL or ask user
-                const appealId = prompt('Введите Appeal ID для создания диалога:');
-                if (!appealId) return;
-                
-                createDialogForAppeal(appealId);
-            });
-        }
-
-        function createDialogForAppeal(appealId) {
-            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-                if (!tabs[0]) return;
-                
-                chrome.tabs.sendMessage(tabs[0].id, {
-                    action: 'createDialogForAppeal',
-                    appealId: appealId
-                }, function(response) {
-                    if (response && response.success && response.dialogId) {
-                        showNotification(`Dialog ID создан: ${response.dialogId}`);
-                        loadData(); // Refresh data
-                    } else {
-                        showNotification('Не удалось создать Dialog ID', 'error');
-                    }
-                });
-            });
-        }
-
-        function updateStats(stats) {
-            if (stats.dialogIdsCount !== undefined) {
-                document.getElementById('totalDialogs').textContent = stats.dialogIdsCount;
-            }
-            if (stats.appealIdsCount !== undefined) {
-                document.getElementById('totalAppeals').textContent = stats.appealIdsCount;
-            }
-            if (stats.networkLogCount !== undefined) {
-                document.getElementById('networkEvents').textContent = stats.networkLogCount;
-            }
+            // Calculate success rate
+            const successRate = stats.processedAppeals > 0 ? 
+                Math.round((stats.successCount || 0) / stats.processedAppeals * 100) : 0;
+            document.getElementById('successRate').textContent = successRate + '%';
             
             // Update status
+            updateSystemStatus();
+        }
+
+        function updateSystemStatus() {
             const statusDot = document.getElementById('statusDot');
             const statusText = document.getElementById('statusText');
             
             if (stats.currentUrl && stats.currentUrl.includes('omnichat.rt.ru')) {
-                statusDot.classList.remove('inactive');
-                statusText.textContent = 'Активно на OmniChat';
+                if (stats.isProcessing) {
+                    statusDot.className = 'status-dot processing';
+                    statusText.textContent = 'Processing...';
+                } else if (stats.autoResponseEnabled) {
+                    statusDot.className = 'status-dot';
+                    statusText.textContent = 'Active';
+                } else {
+                    statusDot.className = 'status-dot inactive';
+                    statusText.textContent = 'Paused';
+                }
             } else {
-                statusDot.classList.add('inactive');
-                statusText.textContent = 'Ожидание OmniChat';
+                statusDot.className = 'status-dot inactive';
+                statusText.textContent = 'Not on OmniChat';
             }
         }
 
-        function toggleAutoResponse(e) {
-            const enabled = e.target.checked;
-            
+        function updateQueue() {
             chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
                 if (!tabs[0]) return;
                 
-                chrome.tabs.sendMessage(tabs[0].id, {
-                    action: 'toggleAutoResponse'
-                }, function(response) {
+                // Send a custom message to get queue data
+                chrome.tabs.sendMessage(tabs[0].id, {action: 'getQueue'}, function(response) {
                     if (response && response.success) {
-                        showNotification(response.enabled ? 'Автоответ включен' : 'Автоответ выключен');
+                        displayQueue(response.queue);
                     }
                 });
             });
         }
 
-        function clearData() {
-            if (!confirm('Очистить все данные?')) return;
+        function displayQueue(queue) {
+            const container = document.getElementById('queueList');
+            
+            if (!queue || queue.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">📭</div>
+                        <div class="empty-message">No appeals in queue</div>
+                    </div>
+                `;
+                return;
+            }
+            
+            const html = queue.map((item, index) => {
+                const time = new Date(item.timestamp).toLocaleTimeString('ru-RU');
+                const status = index === 0 ? 'processing' : 'pending';
+                
+                return `
+                    <div class="queue-item">
+                        <div class="queue-item-info">
+                            <div class="queue-item-id">Appeal #${item.appealId}</div>
+                            <div class="queue-item-time">Added: ${time}</div>
+                        </div>
+                        <div class="queue-item-status ${status}">${status}</div>
+                    </div>
+                `;
+            }).join('');
+            
+            container.innerHTML = html;
+        }
+
+        function updateRecentActivity() {
+            chrome.storage.local.get(['recentActivity'], function(result) {
+                const activity = result.recentActivity || [];
+                displayRecentActivity(activity.slice(-5).reverse());
+            });
+        }
+
+        function displayRecentActivity(activity) {
+            const container = document.getElementById('recentActivity');
+            
+            if (!activity || activity.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">🕐</div>
+                        <div class="empty-message">No recent activity</div>
+                    </div>
+                `;
+                return;
+            }
+            
+            const html = activity.map(item => {
+                const time = new Date(item.timestamp).toLocaleTimeString('ru-RU');
+                const statusClass = item.success ? 'completed' : 'failed';
+                const statusText = item.success ? 'Completed' : 'Failed';
+                
+                return `
+                    <div class="queue-item">
+                        <div class="queue-item-info">
+                            <div class="queue-item-id">Appeal #${item.appealId}</div>
+                            <div class="queue-item-time">${time} - ${item.action || 'Processed'}</div>
+                        </div>
+                        <div class="queue-item-status ${statusClass}">${statusText}</div>
+                    </div>
+                `;
+            }).join('');
+            
+            container.innerHTML = html;
+        }
+
+        // Control Functions
+        function testAutoResponse() {
+            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+                if (!tabs[0]) return;
+                
+                addLog('info', 'Testing auto-response system...');
+                
+                chrome.tabs.sendMessage(tabs[0].id, {action: 'testAutoResponse'}, function(response) {
+                    if (response && response.success) {
+                        showNotification('Test initiated', 'info');
+                        addLog('success', 'Test completed successfully');
+                    } else {
+                        showNotification('Test failed', 'error');
+                        addLog('error', 'Test failed: ' + (response?.error || 'Unknown error'));
+                    }
+                });
+            });
+        }
+
+        function checkAppeals() {
+            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+                if (!tabs[0]) return;
+                
+                addLog('info', 'Checking for new appeals...');
+                
+                chrome.tabs.sendMessage(tabs[0].id, {action: 'checkAppeals'}, function(response) {
+                    if (response && response.success) {
+                        const count = response.count || 0;
+                        showNotification(`Found ${count} appeals`, 'info');
+                        addLog('success', `Found ${count} new appeals`);
+                        refreshDashboard();
+                    }
+                });
+            });
+        }
+
+        function processManualAppeal() {
+            const appealId = document.getElementById('manualAppealId').value.trim();
+            
+            if (!appealId) {
+                showNotification('Please enter an Appeal ID', 'error');
+                return;
+            }
+            
+            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+                if (!tabs[0]) return;
+                
+                addLog('info', `Manually processing appeal: ${appealId}`);
+                
+                chrome.tabs.sendMessage(tabs[0].id, {
+                    action: 'processManual',
+                    appealId: appealId
+                }, function(response) {
+                    if (response && response.success) {
+                        showNotification('Appeal added to queue', 'success');
+                        addLog('success', `Appeal ${appealId} added to processing queue`);
+                        document.getElementById('manualAppealId').value = '';
+                        refreshDashboard();
+                    } else {
+                        showNotification('Failed to process appeal', 'error');
+                        addLog('error', `Failed to process appeal ${appealId}`);
+                    }
+                });
+            });
+        }
+
+        function clearQueue() {
+            if (!confirm('Clear all pending appeals from queue?')) return;
+            
+            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+                if (!tabs[0]) return;
+                
+                chrome.tabs.sendMessage(tabs[0].id, {action: 'clearQueue'}, function(response) {
+                    if (response && response.success) {
+                        showNotification('Queue cleared', 'success');
+                        addLog('info', 'Queue cleared');
+                        refreshDashboard();
+                    }
+                });
+            });
+        }
+
+        function clearAllData() {
+            if (!confirm('This will reset all data and settings. Continue?')) return;
             
             chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
                 if (!tabs[0]) return;
                 
                 chrome.tabs.sendMessage(tabs[0].id, {action: 'clearData'}, function(response) {
                     if (response && response.success) {
-                        showNotification('Данные очищены');
-                        loadData();
+                        showNotification('All data cleared', 'success');
+                        addLog('warning', 'All data has been reset');
+                        refreshDashboard();
                     }
                 });
             });
         }
 
-        function exportData() {
-            chrome.storage.local.get(['dialogIds', 'networkLog'], function(result) {
-                const data = {
-                    dialogIds: result.dialogIds || [],
-                    timestamp: new Date().toISOString(),
-                    source: 'OmniChat Traffic Analyzer'
+        // Logs Functions
+        function refreshLogs() {
+            displayLogs();
+        }
+
+        function addLog(type, message) {
+            const log = {
+                type: type,
+                message: message,
+                timestamp: Date.now()
+            };
+            
+            logs.unshift(log);
+            if (logs.length > 100) logs.pop();
+            
+            // Update badge
+            const logsBadge = document.getElementById('logsBadge');
+            if (type === 'error' || type === 'warning') {
+                const count = parseInt(logsBadge.textContent || 0) + 1;
+                logsBadge.textContent = count;
+                logsBadge.style.display = 'inline-block';
+            }
+            
+            // Save to storage
+            chrome.storage.local.set({ logs: logs });
+            
+            // Update display if on logs tab
+            if (currentTab === 'logs') {
+                displayLogs();
+            }
+        }
+
+        function displayLogs(filter = 'all') {
+            const container = document.getElementById('logsList');
+            const filteredLogs = filter === 'all' ? logs : logs.filter(log => log.type === filter);
+            
+            if (filteredLogs.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">📜</div>
+                        <div class="empty-message">No logs available</div>
+                    </div>
+                `;
+                return;
+            }
+            
+            const html = filteredLogs.map(log => {
+                const time = new Date(log.timestamp).toLocaleTimeString('ru-RU');
+                return `
+                    <div class="log-entry ${log.type}">
+                        <div class="log-time">${time}</div>
+                        <div class="log-message">${log.message}</div>
+                    </div>
+                `;
+            }).join('');
+            
+            container.innerHTML = html;
+        }
+
+        function clearLogs() {
+            logs = [];
+            chrome.storage.local.remove(['logs']);
+            document.getElementById('logsBadge').style.display = 'none';
+            displayLogs();
+            showNotification('Logs cleared', 'info');
+        }
+
+        // Config Functions
+        function loadConfig() {
+            chrome.storage.local.get(['templateConfig'], function(result) {
+                config = result.templateConfig || {
+                    templateText: 'Запрос принят в работу',
+                    responseDelay: 2000,
+                    clickDelay: 500,
+                    maxRetries: 3
                 };
                 
+                // Update UI
+                document.getElementById('templateText').value = config.templateText;
+                document.getElementById('responseDelay').value = config.responseDelay;
+                document.getElementById('clickDelay').value = config.clickDelay;
+                document.getElementById('maxRetries').value = config.maxRetries;
+                
+                updateSliderValues();
+            });
+        }
+
+        function saveConfig() {
+            config = {
+                templateText: document.getElementById('templateText').value,
+                responseDelay: parseInt(document.getElementById('responseDelay').value),
+                clickDelay: parseInt(document.getElementById('clickDelay').value),
+                maxRetries: parseInt(document.getElementById('maxRetries').value)
+            };
+            
+            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+                if (!tabs[0]) return;
+                
+                chrome.tabs.sendMessage(tabs[0].id, {
+                    action: 'updateTemplateConfig',
+                    config: config
+                }, function(response) {
+                    if (response && response.success) {
+                        showNotification('Configuration saved', 'success');
+                        addLog('info', 'Configuration updated');
+                    }
+                });
+            });
+        }
+
+        // History Functions
+        function loadHistory() {
+            chrome.storage.local.get(['processedAppeals'], function(result) {
+                const history = result.processedAppeals || [];
+                displayHistory(history.slice(-20).reverse());
+            });
+        }
+
+        function displayHistory(history) {
+            const container = document.getElementById('historyList');
+            
+            if (!history || history.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">📚</div>
+                        <div class="empty-message">No processing history</div>
+                    </div>
+                `;
+                return;
+            }
+            
+            const html = history.map(item => {
+                const date = new Date(item.timestamp);
+                const time = date.toLocaleTimeString('ru-RU');
+                const dateStr = date.toLocaleDateString('ru-RU');
+                
+                return `
+                    <div class="history-item">
+                        <div class="history-header">
+                            <div class="history-id">Appeal #${item.appealId}</div>
+                            <div class="history-time">${dateStr} ${time}</div>
+                        </div>
+                        <div class="history-details">
+                            <div class="history-detail">
+                                <span>✅</span> Processed
+                            </div>
+                            ${item.responseTime ? `
+                                <div class="history-detail">
+                                    <span>⏱️</span> ${item.responseTime}ms
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            container.innerHTML = html;
+        }
+
+        function clearHistory() {
+            if (!confirm('Clear all processing history?')) return;
+            
+            chrome.storage.local.remove(['processedAppeals']);
+            loadHistory();
+            showNotification('History cleared', 'info');
+        }
+
+        // Event Listeners
+        function setupEventListeners() {
+            // Auto Response Toggle
+            document.getElementById('autoResponseToggle').addEventListener('change', function(e) {
+                const enabled = e.target.checked;
+                
+                chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+                    if (!tabs[0]) return;
+                    
+                    chrome.tabs.sendMessage(tabs[0].id, {
+                        action: 'toggleAutoResponse'
+                    }, function(response) {
+                        if (response && response.success) {
+                            showNotification(response.enabled ? 'Auto-response enabled' : 'Auto-response disabled', 'info');
+                            addLog('info', response.enabled ? 'Auto-response enabled' : 'Auto-response disabled');
+                            refreshDashboard();
+                        }
+                    });
+                });
+            });
+
+            // Sliders
+            document.getElementById('responseDelay').addEventListener('input', updateSliderValues);
+            document.getElementById('clickDelay').addEventListener('input', updateSliderValues);
+            document.getElementById('maxRetries').addEventListener('input', updateSliderValues);
+
+            // Log Filters
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    displayLogs(this.dataset.filter);
+                });
+            });
+        }
+
+        function updateSliderValues() {
+            document.getElementById('responseDelayValue').textContent = 
+                document.getElementById('responseDelay').value + 'ms';
+            document.getElementById('clickDelayValue').textContent = 
+                document.getElementById('clickDelay').value + 'ms';
+            document.getElementById('maxRetriesValue').textContent = 
+                document.getElementById('maxRetries').value;
+        }
+
+        // Helper Functions
+        function showNotification(message, type = 'info') {
+            const notification = document.getElementById('notification');
+            notification.textContent = message;
+            notification.className = `notification ${type} show`;
+            
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 3000);
+        }
+
+        function exportData() {
+            chrome.storage.local.get(null, function(data) {
                 const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `omnichat-dialogs-${Date.now()}.json`;
+                a.download = `omnichat-data-${Date.now()}.json`;
                 a.click();
                 URL.revokeObjectURL(url);
                 
-                showNotification('Данные экспортированы');
+                showNotification('Data exported', 'success');
             });
         }
 
-        function copyToClipboard(text) {
-            navigator.clipboard.writeText(text).then(() => {
-                showNotification('Dialog ID скопирован!');
-            });
+        function importData() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'application/json';
+            input.onchange = function(e) {
+                const file = e.target.files[0];
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    try {
+                        const data = JSON.parse(event.target.result);
+                        chrome.storage.local.set(data, function() {
+                            showNotification('Data imported successfully', 'success');
+                            loadInitialData();
+                        });
+                    } catch (error) {
+                        showNotification('Invalid file format', 'error');
+                    }
+                };
+                reader.readAsText(file);
+            };
+            input.click();
         }
 
-        function showNotification(text) {
-            const notification = document.getElementById('notification');
-            notification.textContent = text;
-            notification.classList.add('show');
-            
-            setTimeout(() => {
-                notification.classList.remove('show');
-            }, 2000);
+        // Auto Refresh
+        function startAutoRefresh() {
+            autoRefreshInterval = setInterval(() => {
+                if (currentTab === 'dashboard') {
+                    refreshDashboard();
+                }
+            }, 5000); // Refresh every 5 seconds
         }
 
-        function updateUptime() {
-            const uptime = Math.floor((Date.now() - startTime) / 60000);
-            document.getElementById('uptime').textContent = uptime + 'm';
+        function stopAutoRefresh() {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+            }
         }
+
+        // Global functions for onclick handlers
+        window.refreshQueue = updateQueue;
+        window.testAutoResponse = testAutoResponse;
+        window.checkAppeals = checkAppeals;
+        window.clearQueue = clearQueue;
+        window.clearAllData = clearAllData;
+        window.processManualAppeal = processManualAppeal;
+        window.clearLogs = clearLogs;
+        window.saveConfig = saveConfig;
+        window.clearHistory = clearHistory;
+        window.exportData = exportData;
+        window.importData = importData;
+
+        // Load logs from storage on startup
+        chrome.storage.local.get(['logs'], function(result) {
+            logs = result.logs || [];
+            if (currentTab === 'logs') {
+                displayLogs();
+            }
+        });
     </script>
 </body>
 </html>
