@@ -361,15 +361,15 @@ class OmniChatTrafficAnalyzer {
             return false;
         }
         
-        // 2. Проверяем временные метки
+        // 2. Проверяем временные метки с усиленным cooldown (60s)
         const processedTime = this.processedTimestamps.get(appealId);
         if (processedTime) {
             const timeSinceProcessed = Date.now() - processedTime;
-            const cooldownPeriod = 24 * 60 * 60 * 1000; // Увеличиваем до 24 часов для надежности
+            const cooldownPeriod = 60 * 1000; // Усиленный cooldown до 60 секунд
             
             if (timeSinceProcessed < cooldownPeriod) {
-                const hoursAgo = Math.round(timeSinceProcessed / 3600000);
-                console.log(`⏰ Appeal processed ${hoursAgo}h ago, still in cooldown:`, appealId);
+                const secondsAgo = Math.round(timeSinceProcessed / 1000);
+                console.log(`⏰ Appeal processed ${secondsAgo}s ago, still in cooldown:`, appealId);
                 return false;
             } else {
                 // Cooldown истек, но проверяем дополнительно
@@ -402,10 +402,24 @@ class OmniChatTrafficAnalyzer {
 
     // ===== QUEUE MANAGEMENT =====
     addAppealToQueue(appeal) {
+        // Усиленная проверка: глобальный lock на 5 секунд для любого добавления
+        if (window.globalQueueLock && Date.now() - window.globalQueueLock < 5000) {
+            console.log('⏳ Global lock active, skipping add to queue');
+            return false;
+        }
+        window.globalQueueLock = Date.now();  // Установить lock
+        
         // Критическая проверка перед добавлением
         if (!appeal.appealId) {
             console.log('❌ No appeal ID provided');
             return false;
+        }
+        
+        // Нормализуйте ID перед проверкой
+        const normalizedId = appeal.appealId.toString().replace(/^#/, '').trim();
+        if (normalizedId !== appeal.appealId) {
+            console.log('🔄 Normalized ID from', appeal.appealId, 'to', normalizedId);
+            appeal.appealId = normalizedId;
         }
         
         // Проверка на уникальность
@@ -488,6 +502,7 @@ class OmniChatTrafficAnalyzer {
                 this.processedAppeals.add(appeal.appealId);
                 this.processedTimestamps.set(appeal.appealId, Date.now());
                 await this.saveProcessedAppealImmediately(appeal.appealId);
+                window.globalQueueLock = null;
             }
             
             console.log('✅ Successfully processed appeal:', appeal.appealId);
@@ -502,6 +517,7 @@ class OmniChatTrafficAnalyzer {
             this.processedAppeals.add(appeal.appealId);
             this.processedTimestamps.set(appeal.appealId, Date.now());
             await this.saveProcessedAppealImmediately(appeal.appealId);
+            window.globalQueueLock = null;
         }
         
         // Очищаем текущее обрабатываемое обращение
@@ -758,6 +774,7 @@ class OmniChatTrafficAnalyzer {
         
         // КРИТИЧНО: Сразу сохраняем в storage, не откладывая
         await this.saveProcessedAppealImmediately(appeal.appealId);
+        window.globalQueueLock = null;
         
         // Записываем успех
         activity.success = true;
@@ -779,6 +796,7 @@ class OmniChatTrafficAnalyzer {
             this.processedAppeals.add(appeal.appealId);
             this.processedTimestamps.set(appeal.appealId, Date.now());
             await this.saveProcessedAppealImmediately(appeal.appealId);
+            window.globalQueueLock = null;
             
             console.log('⚠️ Marked as processed to prevent duplicates');
             return; // НЕ добавляем обратно в очередь
@@ -798,6 +816,7 @@ class OmniChatTrafficAnalyzer {
         this.processedAppeals.add(appeal.appealId);
         this.processedTimestamps.set(appeal.appealId, Date.now());
         await this.saveProcessedAppealImmediately(appeal.appealId);
+        window.globalQueueLock = null;
     }
     
     // Сохраняем активность
