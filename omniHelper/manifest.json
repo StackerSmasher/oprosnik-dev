@@ -33,7 +33,7 @@
         "*://omnichat.rt.ru/*",
         "*://*.omnichat.rt.ru/*"
       ],
-      "js": ["content.js"],
+      "js": ["content.js", "omniChatAppelMonitor.js", "test-helper.js"],
       "run_at": "document_start",
       "all_frames": true,
       "world": "ISOLATED"

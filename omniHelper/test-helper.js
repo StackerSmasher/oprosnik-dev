@@ -1,260 +1,217 @@
-// ===== TEST HELPER FOR OMNICHAT AUTO-RESPONSE =====
-// Paste this in browser console to test different scenarios
+// 1. Проверка наличия анализатора
+console.log('🔍 Checking OmniAnalyzer...');
+if (window.omniAnalyzer) {
+    console.log('✅ OmniAnalyzer found!');
+    console.log('📊 Current stats:', omniAnalyzer.getStats());
+} else {
+    console.error('❌ OmniAnalyzer not found! Make sure extension is loaded.');
+}
 
-// Test auto-response system
-function testAutoResponse() {
-    console.log('🧪 Testing OmniChat Auto-Response System...');
+// 2. Поиск элементов на странице
+async function checkElements() {
+    console.log('\n🔍 Searching for OmniChat elements...\n');
     
-    // Check if analyzer is available
-    if (!window.omniAnalyzer) {
-        console.error('❌ OmniAnalyzer not found! Make sure extension is loaded.');
-        return;
-    }
+    const elements = {
+        templateButton: document.querySelector('button[data-testid="choose-templates"]'),
+        modal: document.querySelector('div[data-testid="modal"]'),
+        templates: document.querySelectorAll('div[data-testid="reply-template"]'),
+        messageInput: document.querySelector('textarea') || document.querySelector('[contenteditable="true"]'),
+        sendButton: null
+    };
     
-    console.log('✅ OmniAnalyzer found');
-    
-    // Get current stats
-    const stats = window.omniAnalyzer.getStats();
-    console.log('📊 Current stats:', stats);
-    
-    // Test 1: Find message input
-    console.log('\n📝 Test 1: Finding message input...');
-    const inputSelectors = [
-        'textarea[placeholder*="сообщение"]',
-        'textarea[placeholder*="message"]',
-        '.message-input textarea',
-        '.chat-input textarea',
-        '[contenteditable="true"]',
-        'div[role="textbox"]'
+    // Поиск кнопки отправки
+    const sendSelectors = [
+        'button[title*="Отправить"]',
+        'button[aria-label*="Отправить"]',
+        'button[type="submit"]:not([disabled])'
     ];
     
-    let inputFound = false;
-    for (const selector of inputSelectors) {
-        const input = document.querySelector(selector);
-        if (input) {
-            console.log('✅ Found input with selector:', selector);
-            console.log('   Element:', input);
-            inputFound = true;
+    for (const selector of sendSelectors) {
+        elements.sendButton = document.querySelector(selector);
+        if (elements.sendButton) break;
+    }
+    
+    console.log('📋 Template button:', elements.templateButton ? '✅ Found' : '❌ Not found');
+    console.log('📋 Modal window:', elements.modal ? '✅ Visible' : '⚠️ Not visible (will appear on button click)');
+    console.log('📋 Templates:', elements.templates.length > 0 ? `✅ ${elements.templates.length} templates` : '⚠️ No templates (open modal first)');
+    console.log('📋 Message input:', elements.messageInput ? '✅ Found' : '❌ Not found');
+    console.log('📋 Send button:', elements.sendButton ? '✅ Found' : '❌ Not found');
+    
+    return elements;
+}
+
+// 3. Тест открытия модального окна шаблонов
+async function testOpenModal() {
+    console.log('\n🧪 Testing modal opening...\n');
+    
+    const button = document.querySelector('button[data-testid="choose-templates"]');
+    if (!button) {
+        console.error('❌ Template button not found!');
+        return false;
+    }
+    
+    console.log('👆 Clicking template button...');
+    button.click();
+    
+    // Ждем появления модального окна
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    const modal = document.querySelector('div[data-testid="modal"]');
+    const templates = document.querySelectorAll('div[data-testid="reply-template"]');
+    
+    if (modal && templates.length > 0) {
+        console.log('✅ Modal opened successfully!');
+        console.log(`📋 Found ${templates.length} templates`);
+        
+        // Выводим первые 3 шаблона
+        console.log('\n📝 First templates:');
+        for (let i = 0; i < Math.min(3, templates.length); i++) {
+            const title = templates[i].querySelector('span[data-testid="reply-title"]')?.textContent;
+            const text = templates[i].querySelector('div[data-testid="collapsable-text"]')?.textContent;
+            console.log(`  ${i + 1}. ${title}`);
+            console.log(`     Text: ${text?.substring(0, 60)}...`);
+        }
+        
+        return true;
+    } else {
+        console.error('❌ Failed to open modal or no templates found');
+        return false;
+    }
+}
+
+// 4. Тест выбора шаблона
+async function testSelectTemplate() {
+    console.log('\n🧪 Testing template selection...\n');
+    
+    // Сначала открываем модальное окно
+    const modalOpened = await testOpenModal();
+    if (!modalOpened) return false;
+    
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Ищем первый шаблон с текстом "Запрос принят в работу"
+    const templates = document.querySelectorAll('div[data-testid="reply-template"]');
+    let targetTemplate = null;
+    
+    for (const template of templates) {
+        const text = template.querySelector('div[data-testid="collapsable-text"]')?.textContent;
+        if (text && text.includes('Запрос принят в работу')) {
+            targetTemplate = template;
+            console.log('✅ Found target template with text: "Запрос принят в работу"');
             break;
         }
     }
     
-    if (!inputFound) {
-        console.log('❌ No message input found');
+    if (!targetTemplate && templates.length > 0) {
+        targetTemplate = templates[0];
+        console.log('⚠️ Target text not found, using first template');
     }
     
-    // Test 2: Find send button
-    console.log('\n📝 Test 2: Finding send button...');
-    const sendSelectors = [
-        'button[title*="отправить"]',
-        'button[title*="send"]',
-        '.send-button',
-        'button[type="submit"]',
-        'button:has(svg)'
-    ];
-    
-    let buttonFound = false;
-    for (const selector of sendSelectors) {
-        try {
-            const button = document.querySelector(selector);
-            if (button) {
-                console.log('✅ Found button with selector:', selector);
-                console.log('   Element:', button);
-                buttonFound = true;
-                break;
-            }
-        } catch (e) {
-            // :has selector might not be supported
-        }
-    }
-    
-    if (!buttonFound) {
-        console.log('❌ No send button found');
-    }
-    
-    // Test 3: Extract dialogId
-    console.log('\n📝 Test 3: Extracting dialogId...');
-    const dialogId = window.omniAnalyzer.extractDialogId();
-    if (dialogId) {
-        console.log('✅ Extracted dialogId:', dialogId);
-    } else {
-        console.log('❌ Could not extract dialogId from page');
-        console.log('   Checking stored dialogIds...');
-        const storedIds = window.omniAnalyzer.getDialogIds();
-        if (storedIds.length > 0) {
-            console.log('   ✅ Found stored dialogIds:', storedIds);
-        } else {
-            console.log('   ❌ No stored dialogIds');
-        }
-    }
-    
-    // Test 4: Test DOM send method
-    console.log('\n📝 Test 4: Testing DOM send method...');
-    console.log('   Attempting to send test message via DOM...');
-    
-    window.omniAnalyzer.testDOMSend('Test message from console').then(result => {
-        if (result) {
-            console.log('   ✅ DOM send method succeeded');
-        } else {
-            console.log('   ❌ DOM send method failed');
-        }
-    });
-    
-    // Test 5: Test full auto-response
-    console.log('\n📝 Test 5: Testing full auto-response...');
-    const testResult = window.omniAnalyzer.testAutoResponse();
-    console.log('   Result:', testResult);
-    
-    console.log('\n🏁 Test complete!');
-    console.log('💡 Tips:');
-    console.log('   - Use window.omniAnalyzer.toggleAutoResponse() to toggle auto-response');
-    console.log('   - Use window.omniAnalyzer.getStats() to see current statistics');
-    console.log('   - Check browser console for detailed logs');
-}
-
-// Simulate incoming message
-function simulateIncomingMessage(text = 'Test incoming message') {
-    console.log('📨 Simulating incoming message...');
-    
-    // Method 1: Create fake message element
-    const messageContainer = document.querySelector('.messages-container, .chat-messages, .message-list, [role="log"]');
-    
-    if (messageContainer) {
-        const messageEl = document.createElement('div');
-        messageEl.className = 'message incoming client-message';
-        messageEl.setAttribute('data-author', 'client');
-        messageEl.setAttribute('data-direction', 'incoming');
-        messageEl.textContent = text;
+    if (targetTemplate) {
+        const title = targetTemplate.querySelector('span[data-testid="reply-title"]')?.textContent;
+        console.log(`👆 Clicking template: ${title}`);
         
-        messageContainer.appendChild(messageEl);
-        console.log('✅ Added fake message to DOM');
+        targetTemplate.click();
         
-        // Trigger mutation observer
-        messageEl.dispatchEvent(new Event('DOMNodeInserted', { bubbles: true }));
-    } else {
-        console.log('❌ Could not find message container');
-    }
-    
-    // Method 2: Trigger via postMessage
-    window.postMessage({
-        source: 'omnichat-interceptor',
-        type: 'network-event',
-        data: {
-            type: 'fetch',
-            phase: 'response',
-            url: '/api/messages',
-            body: {
-                dialogId: '12345',
-                type: 'client',
-                author: 'user',
-                text: text,
-                messageId: Date.now()
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Проверяем, вставился ли текст
+        const messageInput = document.querySelector('textarea') || document.querySelector('[contenteditable="true"]');
+        if (messageInput) {
+            const currentText = messageInput.value || messageInput.textContent || messageInput.innerText;
+            if (currentText) {
+                console.log('✅ Template text inserted!');
+                console.log(`📝 Text: ${currentText.substring(0, 100)}...`);
+                return true;
             }
         }
-    }, '*');
+    }
     
-    console.log('✅ Sent fake network event');
+    console.error('❌ Failed to select template');
+    return false;
 }
 
-// Manual send message
-function manualSendMessage(text) {
-    console.log('📤 Manually sending message:', text);
+// 5. Полный тест цикла (без реальной отправки)
+async function testFullCycle(sendMessage = false) {
+    console.log('\n🔄 Testing full auto-response cycle...\n');
+    console.log('⚠️ Send message:', sendMessage ? 'YES' : 'NO (dry run)');
     
-    // Find input
-    const input = document.querySelector('textarea, [contenteditable="true"], input[type="text"]');
-    if (!input) {
-        console.error('❌ No input found');
-        return;
-    }
-    
-    // Set text
-    if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
-        input.value = text;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-    } else if (input.contentEditable === 'true') {
-        input.textContent = text;
-        input.innerText = text;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-    
-    console.log('✅ Text inserted');
-    
-    // Find and click send button
-    const sendButton = document.querySelector('button[type="submit"], button[title*="send"], button[title*="отправ"], .send-button');
-    if (sendButton) {
-        sendButton.click();
-        console.log('✅ Send button clicked');
-    } else {
-        // Try Enter key
-        const enterEvent = new KeyboardEvent('keydown', {
-            key: 'Enter',
-            code: 'Enter',
-            keyCode: 13,
-            which: 13,
-            bubbles: true
-        });
-        input.dispatchEvent(enterEvent);
-        console.log('✅ Enter key pressed');
-    }
-}
-
-// Monitor network activity
-function monitorNetwork() {
-    console.log('🔍 Starting network monitor...');
-    
-    let requestCount = 0;
-    
-    // Monitor fetch
-    const originalFetch = window.fetch;
-    window.fetch = function(...args) {
-        requestCount++;
-        const [url, options] = args;
-        console.log(`📡 [${requestCount}] Fetch:`, url, options?.method || 'GET');
+    try {
+        // Шаг 1: Проверка элементов
+        console.log('Step 1: Checking elements...');
+        const elements = await checkElements();
         
-        return originalFetch.apply(this, args).then(response => {
-            console.log(`   └─ Response:`, response.status);
-            return response;
-        });
-    };
-    
-    // Monitor XHR
-    const originalOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function(method, url) {
-        requestCount++;
-        console.log(`📡 [${requestCount}] XHR:`, method, url);
-        return originalOpen.apply(this, arguments);
-    };
-    
-    console.log('✅ Network monitor active. Watch console for requests.');
+        // Шаг 2: Открытие модального окна
+        console.log('\nStep 2: Opening template modal...');
+        const button = elements.templateButton || document.querySelector('button[data-testid="choose-templates"]');
+        if (!button) throw new Error('Template button not found');
+        
+        button.click();
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Шаг 3: Выбор шаблона
+        console.log('\nStep 3: Selecting template...');
+        const templates = document.querySelectorAll('div[data-testid="reply-template"]');
+        if (templates.length === 0) throw new Error('No templates found');
+        
+        const firstTemplate = templates[0];
+        const templateTitle = firstTemplate.querySelector('span[data-testid="reply-title"]')?.textContent;
+        console.log(`Selecting: ${templateTitle}`);
+        
+        firstTemplate.click();
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Шаг 4: Проверка текста
+        console.log('\nStep 4: Checking inserted text...');
+        const messageInput = document.querySelector('textarea') || document.querySelector('[contenteditable="true"]');
+        const insertedText = messageInput?.value || messageInput?.textContent || messageInput?.innerText;
+        
+        if (insertedText) {
+            console.log('✅ Text inserted:', insertedText.substring(0, 100) + '...');
+        } else {
+            throw new Error('No text inserted');
+        }
+        
+        // Шаг 5: Отправка (опционально)
+        if (sendMessage) {
+            console.log('\nStep 5: Sending message...');
+            const sendButton = document.querySelector('button[title*="Отправить"]') || 
+                              document.querySelector('button[type="submit"]:not([disabled])');
+            
+            if (sendButton) {
+                console.log('⚠️ Ready to send. Button found:', sendButton);
+                console.log('👆 Clicking send button...');
+                sendButton.click();
+                console.log('✅ Message sent!');
+            } else {
+                console.log('❌ Send button not found');
+            }
+        } else {
+            console.log('\nStep 5: Skipping send (dry run mode)');
+        }
+        
+        console.log('\n✅ Full cycle test completed successfully!');
+        return true;
+        
+    } catch (error) {
+        console.error('❌ Test failed:', error.message);
+        return false;
+    }
 }
 
-// Export functions to global scope
-window.omniTest = {
-    test: testAutoResponse,
-    simulateMessage: simulateIncomingMessage,
-    sendMessage: manualSendMessage,
-    monitorNetwork: monitorNetwork,
-    
-    // Quick commands
-    toggle: () => window.omniAnalyzer?.toggleAutoResponse(),
-    stats: () => window.omniAnalyzer?.getStats(),
-    dialogIds: () => window.omniAnalyzer?.getDialogIds(),
-    
-    help: () => {
-        console.log('🛠️ OmniChat Test Helper Commands:');
-        console.log('  omniTest.test() - Run full test suite');
-        console.log('  omniTest.simulateMessage(text) - Simulate incoming message');
-        console.log('  omniTest.sendMessage(text) - Manually send message');
-        console.log('  omniTest.monitorNetwork() - Start network monitoring');
-        console.log('  omniTest.toggle() - Toggle auto-response');
-        console.log('  omniTest.stats() - Get current stats');
-        console.log('  omniTest.dialogIds() - Get all dialog IDs');
-    }
-};
+// 6. Команды для быстрого тестирования
+console.log('\n📋 Available test commands:\n');
+console.log('  checkElements()       - Check all page elements');
+console.log('  testOpenModal()       - Test opening template modal');
+console.log('  testSelectTemplate()  - Test selecting a template');
+console.log('  testFullCycle(false)  - Test full cycle (dry run)');
+console.log('  testFullCycle(true)   - Test full cycle with send');
+console.log('\n💡 OmniAnalyzer commands:');
+console.log('  omniAnalyzer.getStats()           - Get current statistics');
+console.log('  omniAnalyzer.testAutoResponse()   - Test auto-response');
+console.log('  omniAnalyzer.findTemplateElements() - Find template elements');
+console.log('  omniAnalyzer.testFullCycle()      - Test via extension');
+console.log('  omniAnalyzer.help()               - Show all commands');
 
-// Auto-run basic test
-console.log('🚀 OmniChat Test Helper loaded!');
-console.log('💡 Type "omniTest.help()" for available commands');
-console.log('🧪 Running basic test...\n');
-testAutoResponse();
+// Автоматически проверяем элементы
+checkElements();

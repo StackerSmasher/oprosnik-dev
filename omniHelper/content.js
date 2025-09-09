@@ -13,13 +13,16 @@ class OmniChatTrafficAnalyzer {
         this.appealQueue = [];
         this.isProcessingQueue = false;
         this.processedAppeals = new Set(); // Track processed appeals
+        this.processedTimestamps = new Map(); // Track when appeals were processed
         
         // Template response configuration
         this.templateConfig = {
             responseDelay: 2000, // Delay before processing
             clickDelay: 500, // Delay between clicks
-            templateText: 'Запрос принят в работу', // Template to select
-            maxRetries: 3
+            templateText: 'Добрый день! Запрос принят в работу', // Полный текст шаблона
+            templateTitle: '1.1 Приветствие', // Заголовок шаблона для поиска
+            maxRetries: 3,
+            cooldownPeriod: 2 * 60 * 60 * 1000 // 2 часа - время блокировки повторной отправки приветствия
         };
         
         this.init();
@@ -95,14 +98,18 @@ class OmniChatTrafficAnalyzer {
     }
 
     checkForNewAppeal(element) {
-        // Check if this element or its children contain appeal information
+        // Проверяем различные индикаторы нового обращения
         const appealIndicators = [
             '[data-appeal-id]',
             '[data-appealid]',
             '.appeal-item',
             '.chat-item',
             '.dialog-item',
-            '.conversation-item'
+            '.conversation-item',
+            // Добавляем специфичные для OmniChat селекторы
+            '[data-testid*="appeal"]',
+            '[data-testid*="chat"]',
+            '[data-testid*="dialog"]'
         ];
 
         let appealElement = null;
@@ -114,16 +121,17 @@ class OmniChatTrafficAnalyzer {
 
         if (!appealElement) return;
 
-        // Extract appeal ID
+        // Извлекаем appeal ID
         const appealId = this.extractAppealIdFromElement(appealElement);
         
-        if (appealId && !this.processedAppeals.has(appealId)) {
+        if (appealId && this.isAppealEligibleForProcessing(appealId)) {
             console.log('🆕 New appeal detected:', appealId);
             
-            // Check if it's unread/new
+            // Проверяем, что это новое/непрочитанное обращение
             const isNew = this.isNewAppeal(appealElement);
             
             if (isNew && this.autoResponseEnabled) {
+                console.log('➕ Adding new appeal to queue:', appealId);
                 this.addAppealToQueue({
                     appealId: appealId,
                     element: appealElement,
@@ -217,7 +225,7 @@ class OmniChatTrafficAnalyzer {
             const elements = document.querySelectorAll(selector);
             elements.forEach(el => {
                 const appealId = this.extractAppealIdFromElement(el);
-                if (appealId && !this.processedAppeals.has(appealId)) {
+                if (appealId && this.isAppealEligibleForProcessing(appealId)) {
                     if (this.isNewAppeal(el)) {
                         appeals.push({
                             appealId: appealId,
@@ -240,11 +248,50 @@ class OmniChatTrafficAnalyzer {
         }
     }
 
+    // ===== DEDUPLICATION AND UNIQUENESS =====
+    isAppealEligibleForProcessing(appealId) {
+        // 1. Проверяем, что обращение не было уже обработано
+        if (this.processedAppeals.has(appealId)) {
+            console.log('⏭️ Appeal already processed:', appealId);
+            return false;
+        }
+
+        // 2. Проверяем, что обращение не в очереди
+        const inQueue = this.appealQueue.some(a => a.appealId === appealId);
+        if (inQueue) {
+            console.log('⏳ Appeal already in queue:', appealId);
+            return false;
+        }
+
+        // 3. Проверяем временную блокировку (защита от повторной отправки приветствий)
+        const recentlyProcessed = this.processedTimestamps.get(appealId);
+        if (recentlyProcessed) {
+            const timeSinceProcessed = Date.now() - recentlyProcessed;
+            const cooldownPeriod = this.templateConfig.cooldownPeriod; // Используем конфигурируемое значение
+            
+            if (timeSinceProcessed < cooldownPeriod) {
+                const minutesAgo = Math.round(timeSinceProcessed / 60000);
+                const hoursAgo = Math.round(timeSinceProcessed / 3600000);
+                const timeStr = hoursAgo > 0 ? `${hoursAgo}h ${minutesAgo % 60}m` : `${minutesAgo}m`;
+                console.log(`⏰ Appeal greeting already sent ${timeStr} ago:`, appealId);
+                return false;
+            } else {
+                // Если прошло больше cooldown времени, удаляем старую запись
+                console.log(`🔄 Cooldown expired for appeal:`, appealId);
+                this.processedTimestamps.delete(appealId);
+                this.processedAppeals.delete(appealId);
+            }
+        }
+
+        return true;
+    }
+
     // ===== QUEUE MANAGEMENT =====
     addAppealToQueue(appeal) {
-        // Check if already in queue
-        const exists = this.appealQueue.some(a => a.appealId === appeal.appealId);
-        if (exists) return;
+        // Используем новую систему проверки уникальности
+        if (!this.isAppealEligibleForProcessing(appeal.appealId)) {
+            return;
+        }
 
         console.log('➕ Adding appeal to queue:', appeal.appealId);
         this.appealQueue.push(appeal);
@@ -272,6 +319,7 @@ class OmniChatTrafficAnalyzer {
             
             // Mark as processed
             this.processedAppeals.add(appeal.appealId);
+            this.processedTimestamps.set(appeal.appealId, Date.now());
             
             // Save to storage
             this.saveProcessedAppeal(appeal.appealId);
@@ -296,63 +344,270 @@ class OmniChatTrafficAnalyzer {
 
     // ===== TEMPLATE-BASED RESPONSE SYSTEM =====
     async processAppeal(appeal) {
-        const startTime = Date.now();
-        const activity = {
-            appealId: appeal.appealId,
-            timestamp: startTime,
-            action: 'process'
-        };
+    const startTime = Date.now();
+    const activity = {
+        appealId: appeal.appealId,
+        timestamp: startTime,
+        action: 'process'
+    };
+    
+    try {
+        console.log('🤖 Starting template response for appeal:', appeal.appealId);
+        console.log('📋 Config:', this.templateConfig);
         
-        try {
-            console.log('🤖 Starting template response for appeal:', appeal.appealId);
-            
-            // Step 1: Click on the appeal to select it
+        // Step 0: Проверяем, что мы на правильной странице
+        if (!window.location.href.includes('omnichat.rt.ru')) {
+            throw new Error('Not on OmniChat page');
+        }
+        
+        // Step 1: Выбираем обращение (если есть элемент)
+        if (appeal.element) {
+            console.log('👆 Step 1: Selecting appeal element...');
             const selected = await this.selectAppeal(appeal);
-            if (!selected) throw new Error('Failed to select appeal');
-
+            if (!selected) {
+                console.log('⚠️ Could not select appeal, continuing anyway...');
+            }
             await this.wait(this.templateConfig.clickDelay);
-
-            // Step 2: Open template selector
-            const templateOpened = await this.openTemplateSelector();
-            if (!templateOpened) throw new Error('Failed to open template selector');
-
-            await this.wait(this.templateConfig.clickDelay);
-
-            // Step 3: Select the template
-            const templateSelected = await this.selectTemplate();
-            if (!templateSelected) throw new Error('Failed to select template');
-
-            await this.wait(this.templateConfig.clickDelay);
-
-            // Step 4: Send the message
-            const sent = await this.sendTemplateMessage();
-            if (!sent) throw new Error('Failed to send message');
-
-            console.log('✅ Successfully processed appeal:', appeal.appealId);
+        }
+        
+        // Step 2: Открываем селектор шаблонов
+        console.log('📋 Step 2: Opening template selector...');
+        
+        // Ищем кнопку шаблонов
+        let templateButton = document.querySelector('button[data-testid="choose-templates"]');
+        
+        if (!templateButton) {
+            // Альтернативный поиск
+            console.log('⚠️ Template button not found by data-testid, trying alternative selectors...');
+            templateButton = document.querySelector('button[title="Выбрать шаблон"]') ||
+                           document.querySelector('button[title*="шаблон"]');
+        }
+        
+        if (!templateButton) {
+            throw new Error('Template button not found');
+        }
+        
+        console.log('✅ Found template button, clicking...');
+        templateButton.click();
+        
+        // Ждем появления модального окна
+        await this.wait(800);
+        
+        // Проверяем, что модальное окно открылось
+        const modal = document.querySelector('div[data-testid="modal"]');
+        if (!modal) {
+            console.log('⚠️ Modal not found, retrying...');
+            templateButton.click();
+            await this.wait(1000);
             
-            // Track success
-            activity.success = true;
-            activity.responseTime = Date.now() - startTime;
-            
-        } catch (error) {
-            console.error('❌ Error processing appeal:', error);
-            
-            // Track failure
-            activity.success = false;
-            activity.error = error.message;
-            activity.responseTime = Date.now() - startTime;
-            
-            // Retry logic
-            appeal.retryCount = (appeal.retryCount || 0) + 1;
-            if (appeal.retryCount < this.templateConfig.maxRetries) {
-                console.log('🔄 Retrying appeal:', appeal.appealId);
-                this.appealQueue.push(appeal); // Add back to queue
+            const modalRetry = document.querySelector('div[data-testid="modal"]');
+            if (!modalRetry) {
+                throw new Error('Failed to open template modal');
             }
         }
         
-        // Save activity to recent history
-        this.saveRecentActivity(activity);
+        console.log('✅ Template modal opened');
+        
+        // Ждем загрузки шаблонов
+        await this.wait(500);
+        
+        // Step 3: Выбираем шаблон
+        console.log('✅ Step 3: Selecting template...');
+        
+        const templates = document.querySelectorAll('div[data-testid="reply-template"]');
+        console.log(`📋 Found ${templates.length} templates`);
+        
+        if (templates.length === 0) {
+            throw new Error('No templates found in modal');
+        }
+        
+        let targetTemplate = null;
+        
+        // Ищем шаблон по тексту
+        for (const template of templates) {
+            const textElement = template.querySelector('div[data-testid="collapsable-text"]');
+            const titleElement = template.querySelector('span[data-testid="reply-title"]');
+            
+            if (textElement) {
+                const templateText = textElement.textContent?.trim();
+                const templateTitle = titleElement?.textContent?.trim() || '';
+                
+                // Проверяем по тексту
+                if (templateText && templateText.includes(this.templateConfig.templateText)) {
+                    console.log('✅ Found matching template by text');
+                    targetTemplate = template;
+                    break;
+                }
+                
+                // Проверяем по заголовку
+                if (this.templateConfig.templateTitle && templateTitle.includes(this.templateConfig.templateTitle)) {
+                    console.log('✅ Found matching template by title:', templateTitle);
+                    targetTemplate = template;
+                    break;
+                }
+                
+                // Специальная проверка для первого шаблона приветствия
+                if (templateTitle.includes('1.1 Приветствие')) {
+                    console.log('✅ Found greeting template 1.1');
+                    targetTemplate = template;
+                    break;
+                }
+            }
+        }
+        
+        // Если не нашли, берем первый
+        if (!targetTemplate) {
+            console.log('⚠️ Specific template not found, using first template');
+            targetTemplate = templates[0];
+        }
+        
+        // Кликаем на шаблон
+        const templateTitle = targetTemplate.querySelector('span[data-testid="reply-title"]')?.textContent;
+        console.log(`👆 Clicking template: ${templateTitle}`);
+        
+        targetTemplate.click();
+        
+        // Ждем, пока текст вставится
+        await this.wait(800);
+        
+        // Проверяем, что текст вставился
+        const messageInput = document.querySelector('textarea') || 
+                           document.querySelector('[contenteditable="true"]') ||
+                           document.querySelector('div[role="textbox"]');
+        
+        if (messageInput) {
+            const insertedText = messageInput.value || messageInput.textContent || messageInput.innerText;
+            if (insertedText && insertedText.trim().length > 0) {
+                console.log('✅ Template text inserted successfully');
+                console.log('📝 Text preview:', insertedText.substring(0, 50) + '...');
+            } else {
+                console.log('⚠️ Warning: No text detected in input field');
+            }
+        }
+        
+        // Закрываем модальное окно, если оно еще открыто
+        const closeButton = document.querySelector('div[data-testid="modal"] button[data-testid="functionButton"]');
+        if (closeButton) {
+            console.log('🔒 Closing modal...');
+            closeButton.click();
+            await this.wait(300);
+        }
+        
+        // Step 4: Отправляем сообщение
+        console.log('📤 Step 4: Sending message...');
+        
+        // Ищем кнопку отправки
+        const sendButtonSelectors = [
+            'button[title="Отправить"]',
+            'button[title="Отправить сообщение"]',
+            'button[aria-label="Отправить"]',
+            'button[aria-label="Отправить сообщение"]',
+            'button[data-testid="send-message"]',
+            'button[data-testid="send-button"]',
+            'button[type="submit"]:not([disabled])',
+            '.send-button',
+            '.message-send'
+        ];
+        
+        let sendButton = null;
+        
+        for (const selector of sendButtonSelectors) {
+            sendButton = document.querySelector(selector);
+            if (sendButton && !sendButton.disabled) {
+                console.log('✅ Found send button with selector:', selector);
+                break;
+            }
+        }
+        
+        if (!sendButton) {
+            console.log('⚠️ Send button not found, trying Enter key method...');
+            
+            if (messageInput) {
+                messageInput.focus();
+                
+                // Симулируем нажатие Enter
+                const enterEvent = new KeyboardEvent('keydown', {
+                    key: 'Enter',
+                    code: 'Enter',
+                    keyCode: 13,
+                    which: 13,
+                    bubbles: true,
+                    cancelable: true
+                });
+                
+                messageInput.dispatchEvent(enterEvent);
+                console.log('⌨️ Enter key pressed');
+            } else {
+                throw new Error('No send button and no message input found');
+            }
+        } else {
+            // Кликаем на кнопку отправки
+            sendButton.click();
+            
+            // Дополнительные события для надежности
+            sendButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            sendButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+            sendButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            
+            console.log('✅ Send button clicked');
+        }
+        
+        // Финальная проверка
+        await this.wait(500);
+        
+        // Проверяем, что сообщение отправлено (поле ввода должно быть пустым)
+        if (messageInput) {
+            const remainingText = messageInput.value || messageInput.textContent || messageInput.innerText;
+            if (!remainingText || remainingText.trim().length === 0) {
+                console.log('✅ Message sent successfully (input field is empty)');
+            } else {
+                console.log('⚠️ Warning: Input field still contains text');
+            }
+        }
+        
+        console.log('✅ Successfully processed appeal:', appeal.appealId);
+        
+        // Записываем успех
+        activity.success = true;
+        activity.responseTime = Date.now() - startTime;
+        
+    } catch (error) {
+        console.error('❌ Error processing appeal:', error.message);
+        console.error('Stack trace:', error.stack);
+        
+        // Записываем ошибку
+        activity.success = false;
+        activity.error = error.message;
+        activity.responseTime = Date.now() - startTime;
+        
+        // Добавляем скриншот состояния для отладки
+        this.logCurrentState();
+        
+        // Retry логика
+        appeal.retryCount = (appeal.retryCount || 0) + 1;
+        if (appeal.retryCount < this.templateConfig.maxRetries) {
+            console.log(`🔄 Will retry (attempt ${appeal.retryCount + 1}/${this.templateConfig.maxRetries})`);
+            
+            // Добавляем обратно в очередь с задержкой
+            setTimeout(() => {
+                this.appealQueue.push(appeal);
+            }, 3000);
+        } else {
+            console.log('❌ Max retries reached, giving up on appeal:', appeal.appealId);
+        }
     }
+    
+    // Сохраняем активность
+    this.saveRecentActivity(activity);
+    
+    // Логируем итоговую статистику
+    console.log('📊 Processing complete:', {
+        appealId: appeal.appealId,
+        success: activity.success,
+        time: `${activity.responseTime}ms`,
+        retries: appeal.retryCount || 0
+    });
+}
 
     async selectAppeal(appeal) {
         console.log('👆 Selecting appeal:', appeal.appealId);
@@ -403,202 +658,193 @@ class OmniChatTrafficAnalyzer {
     async openTemplateSelector() {
         console.log('📋 Opening template selector...');
         
-        const templateButtonSelectors = [
-            // Common template button selectors
-            'button[title*="шаблон"]',
-            'button[title*="template"]',
-            'button[aria-label*="шаблон"]',
-            'button[aria-label*="template"]',
-            '.template-button',
-            '.template-selector-button',
-            '[data-testid="template-button"]',
-            'button:has(.icon-template)',
-            'button:has(svg[data-icon="template"])',
+        // Используем реальный селектор из OmniChat
+        const templateButton = document.querySelector('button[data-testid="choose-templates"]');
+        
+        if (templateButton) {
+            console.log('✅ Found template button:', templateButton.title);
             
-            // Icon-based selectors
-            'button svg[class*="template"]',
-            'button i[class*="template"]',
+            // Кликаем на кнопку
+            templateButton.click();
             
-            // Text-based selectors
-            'button:contains("Шаблон")',
-            'button:contains("Template")',
+            // Ждем появления модального окна
+            await this.wait(500);
             
-            // Generic toolbar buttons that might be template
-            '.toolbar button:nth-of-type(2)', // Often template is second button
-            '.message-toolbar button[title]',
-            '.chat-toolbar button'
-        ];
-
-        for (const selector of templateButtonSelectors) {
-            try {
-                const button = document.querySelector(selector);
-                if (button) {
-                    console.log('Found template button with selector:', selector);
-                    button.click();
-                    
-                    // Wait for template menu to appear
-                    await this.wait(300);
-                    
-                    // Check if menu appeared
-                    const menuAppeared = document.querySelector('.template-menu, .template-list, .dropdown-menu, [role="menu"]');
-                    if (menuAppeared) {
-                        return true;
-                    }
-                }
-            } catch (e) {
-                // Some selectors might not be valid
-            }
-        }
-
-        // Fallback: Try to find by visual inspection
-        const allButtons = document.querySelectorAll('button');
-        for (const button of allButtons) {
-            const title = button.title || button.getAttribute('aria-label') || '';
-            const text = button.textContent || '';
-            
-            if (title.toLowerCase().includes('шаблон') || 
-                title.toLowerCase().includes('template') ||
-                text.toLowerCase().includes('шаблон') ||
-                text.toLowerCase().includes('template')) {
+            // Проверяем, что модальное окно открылось
+            const modal = document.querySelector('div[data-testid="modal"]');
+            if (modal) {
+                console.log('✅ Template modal opened');
                 
-                button.click();
+                // Ждем загрузки шаблонов
                 await this.wait(300);
                 
-                const menuAppeared = document.querySelector('.template-menu, .template-list, .dropdown-menu');
-                if (menuAppeared) {
-                    return true;
-                }
+                // Проверяем наличие шаблонов
+                const templates = document.querySelectorAll('div[data-testid="reply-template"]');
+                console.log(`📋 Found ${templates.length} templates`);
+                
+                return true;
             }
         }
-
+        
+        console.log('❌ Failed to open template selector');
         return false;
     }
 
     async selectTemplate() {
         console.log('✅ Selecting template:', this.templateConfig.templateText);
         
-        const templateSelectors = [
-            // Direct template item selectors
-            '.template-item',
-            '.template-option',
-            '.template-list-item',
-            '[role="menuitem"]',
-            '.dropdown-item',
-            '.menu-item',
+        // Ищем все шаблоны
+        const templates = document.querySelectorAll('div[data-testid="reply-template"]');
+        
+        if (templates.length === 0) {
+            console.log('❌ No templates found');
+            return false;
+        }
+        
+        // Ищем нужный шаблон по тексту
+        let targetTemplate = null;
+        
+        for (const template of templates) {
+            // Ищем текст шаблона
+            const textElement = template.querySelector('div[data-testid="collapsable-text"]');
+            const titleElement = template.querySelector('span[data-testid="reply-title"]');
             
-            // List-based selectors
-            '.template-list li',
-            '.template-menu li',
-            'ul[role="menu"] li',
-            '.dropdown-menu a',
-            '.dropdown-menu button'
-        ];
-
-        // First, try to find by exact text
-        for (const selector of templateSelectors) {
-            const items = document.querySelectorAll(selector);
-            for (const item of items) {
-                const text = item.textContent?.trim();
-                if (text && text.includes(this.templateConfig.templateText)) {
-                    console.log('Found template by text:', text);
-                    item.click();
-                    return true;
+            if (textElement) {
+                const templateText = textElement.textContent?.trim();
+                const templateTitle = titleElement?.textContent?.trim() || '';
+                
+                console.log(`Checking template: ${templateTitle}`);
+                
+                // Проверяем, содержит ли текст нужную фразу
+                if (templateText && templateText.includes(this.templateConfig.templateText)) {
+                    console.log('✅ Found matching template by text');
+                    targetTemplate = template;
+                    break;
+                }
+                
+                // Также проверяем по заголовку (1.1 Приветствие)
+                if (templateTitle.includes('1.1 Приветствие')) {
+                    console.log('✅ Found template 1.1 (first greeting template)');
+                    targetTemplate = template;
+                    break;
                 }
             }
         }
-
-        // If not found by text, try to select the first template (as specified)
-        for (const selector of templateSelectors) {
-            const firstItem = document.querySelector(selector + ':first-child');
-            if (firstItem) {
-                console.log('Selecting first template item');
-                firstItem.click();
-                return true;
-            }
+        
+        // Если не нашли по тексту, берем первый шаблон
+        if (!targetTemplate) {
+            console.log('⚠️ Template not found by text, selecting first template');
+            targetTemplate = templates[0];
         }
-
-        // Alternative: Look for any clickable element in template menu
-        const templateMenu = document.querySelector('.template-menu, .template-list, .dropdown-menu, [role="menu"]');
-        if (templateMenu) {
-            const firstClickable = templateMenu.querySelector('a, button, li, [role="menuitem"]');
-            if (firstClickable) {
-                firstClickable.click();
-                return true;
+        
+        if (targetTemplate) {
+            // Кликаем на шаблон
+            targetTemplate.click();
+            
+            // Также пробуем кликнуть на текстовую область внутри
+            const clickableArea = targetTemplate.querySelector('div[data-testid="collapsable-text"]') || 
+                                targetTemplate.querySelector('.sc-hLtZSE') || 
+                                targetTemplate;
+            
+            clickableArea.click();
+            
+            console.log('✅ Template clicked');
+            
+            // Ждем, пока шаблон вставится в поле ввода
+            await this.wait(500);
+            
+            // Закрываем модальное окно (если оно не закрылось автоматически)
+            const closeButton = document.querySelector('button[data-testid="functionButton"]');
+            if (closeButton) {
+                closeButton.click();
+                console.log('✅ Modal closed');
             }
+            
+            return true;
         }
-
+        
+        console.log('❌ Failed to select template');
         return false;
     }
 
     async sendTemplateMessage() {
         console.log('📤 Sending template message...');
         
-        // Wait for template to be inserted
+        // Ждем, пока текст шаблона вставится
         await this.wait(500);
         
+        // Проверяем, что текст вставлен в поле ввода
+        const messageInput = document.querySelector('textarea') || 
+                            document.querySelector('[contenteditable="true"]') ||
+                            document.querySelector('div[role="textbox"]');
+        
+        if (messageInput) {
+            const currentText = messageInput.value || messageInput.textContent || messageInput.innerText;
+            console.log('📝 Current message text:', currentText?.substring(0, 50) + '...');
+        }
+        
+        // Ищем кнопку отправки
         const sendButtonSelectors = [
-            // Specific send button selectors
-            'button[title*="отправить"]',
-            'button[title*="send"]',
             'button[title*="Отправить"]',
-            'button[aria-label*="send"]',
+            'button[aria-label*="Отправить"]',
+            'button[title*="отправить"]',
             'button[aria-label*="отправить"]',
-            '.send-button',
-            '.message-send',
-            '[data-testid="send-button"]',
-            
-            // Icon-based selectors
-            'button svg[data-icon="send"]',
-            'button i.fa-paper-plane',
-            'button i.icon-send',
-            
-            // Generic submit buttons
-            'button[type="submit"]:not([disabled])',
-            
-            // Position-based (send button often at bottom right)
-            '.message-input-container button:last-child',
-            '.chat-footer button:last-child'
+            'button[data-testid="send-message"]',
+            'button[data-testid="send-button"]',
+            '.message-send-button',
+            'button[type="submit"]:not([disabled])'
         ];
-
+        
+        let sendButton = null;
+        
         for (const selector of sendButtonSelectors) {
-            try {
-                const button = document.querySelector(selector);
-                if (button && !button.disabled) {
-                    console.log('Found send button with selector:', selector);
-                    
-                    // Ensure button is visible and clickable
-                    const rect = button.getBoundingClientRect();
-                    if (rect.width > 0 && rect.height > 0) {
-                        button.click();
-                        
-                        // Also dispatch events for better compatibility
-                        button.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                        button.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                        button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                        
-                        return true;
-                    }
-                }
-            } catch (e) {
-                // Some selectors might fail
+            sendButton = document.querySelector(selector);
+            if (sendButton && !sendButton.disabled) {
+                console.log('✅ Found send button with selector:', selector);
+                break;
             }
         }
-
-        // Fallback: Try Enter key in message input
-        const messageInput = document.querySelector('textarea, [contenteditable="true"]');
+        
+        if (sendButton) {
+            // Убеждаемся, что кнопка видима и активна
+            const rect = sendButton.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+                // Кликаем на кнопку
+                sendButton.click();
+                
+                // Дополнительно триггерим события для надежности
+                sendButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                sendButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                sendButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                
+                console.log('✅ Send button clicked');
+                return true;
+            }
+        }
+        
+        // Альтернативный метод - нажатие Enter
         if (messageInput) {
+            console.log('⚠️ Send button not found, trying Enter key');
+            
             messageInput.focus();
+            
+            // Симулируем нажатие Enter
             const enterEvent = new KeyboardEvent('keydown', {
                 key: 'Enter',
                 code: 'Enter',
                 keyCode: 13,
                 which: 13,
-                bubbles: true
+                bubbles: true,
+                cancelable: true
             });
+            
             messageInput.dispatchEvent(enterEvent);
+            
+            console.log('✅ Enter key pressed');
             return true;
         }
-
+        
+        console.log('❌ Failed to send message');
         return false;
     }
 
@@ -608,23 +854,42 @@ class OmniChatTrafficAnalyzer {
     }
 
     saveProcessedAppeal(appealId) {
-        chrome.storage.local.get(['processedAppeals'], (result) => {
+        chrome.storage.local.get(['processedAppeals', 'processedTimestamps'], (result) => {
             const processed = result.processedAppeals || [];
+            const timestamps = result.processedTimestamps || {};
+            
+            const now = Date.now();
+            
             processed.push({
                 appealId: appealId,
-                timestamp: Date.now(),
+                timestamp: now,
                 date: new Date().toISOString()
             });
+            
+            // Сохраняем timestamp для дедупликации
+            timestamps[appealId] = now;
             
             // Keep only last 100 processed appeals
             const trimmed = processed.slice(-100);
             
-            chrome.storage.local.set({ processedAppeals: trimmed });
+            // Очищаем старые timestamps (старше 3 часов)
+            const threeHoursAgo = now - 3 * 60 * 60 * 1000;
+            const cleanedTimestamps = {};
+            Object.entries(timestamps).forEach(([id, timestamp]) => {
+                if (timestamp > threeHoursAgo) {
+                    cleanedTimestamps[id] = timestamp;
+                }
+            });
+            
+            chrome.storage.local.set({ 
+                processedAppeals: trimmed,
+                processedTimestamps: cleanedTimestamps
+            });
         });
     }
 
     loadSettings() {
-        chrome.storage.local.get(['autoResponseEnabled', 'processedAppeals', 'templateConfig'], (result) => {
+        chrome.storage.local.get(['autoResponseEnabled', 'processedAppeals', 'templateConfig', 'processedTimestamps'], (result) => {
             if (result.autoResponseEnabled !== undefined) {
                 this.autoResponseEnabled = result.autoResponseEnabled;
             }
@@ -635,12 +900,29 @@ class OmniChatTrafficAnalyzer {
                 });
             }
             
+            if (result.processedTimestamps) {
+                // Загружаем timestamps и очищаем старые (старше 3 часов для надежности)
+                const now = Date.now();
+                const threeHoursAgo = now - 3 * 60 * 60 * 1000;
+                
+                Object.entries(result.processedTimestamps).forEach(([appealId, timestamp]) => {
+                    if (timestamp > threeHoursAgo) {
+                        this.processedTimestamps.set(appealId, timestamp);
+                        // Также добавляем в processedAppeals для обратной совместимости
+                        this.processedAppeals.add(appealId);
+                    }
+                });
+                
+                console.log(`🧹 Cleaned old timestamps, kept ${this.processedTimestamps.size} recent ones`);
+            }
+            
             if (result.templateConfig) {
                 Object.assign(this.templateConfig, result.templateConfig);
             }
             
             console.log('⚙️ Settings loaded - Auto-response:', this.autoResponseEnabled);
             console.log('📋 Template config:', this.templateConfig);
+            console.log('📊 Processed appeals:', this.processedAppeals.size);
         });
     }
 
@@ -732,6 +1014,28 @@ class OmniChatTrafficAnalyzer {
     }
 
     handleInterceptedData(data) {
+        // Проверяем URL на наличие appealId
+        if (data.url && data.url.includes('appealId=')) {
+            const urlMatch = data.url.match(/appealId=(\d+)/);
+            if (urlMatch) {
+                const appealId = urlMatch[1];
+                console.log('🔍 Found appealId in URL:', appealId);
+                
+                // Добавляем в очередь, если это новое обращение
+                if (this.isAppealEligibleForProcessing(appealId)) {
+                    setTimeout(() => {
+                        console.log('🆕 New appeal from API:', appealId);
+                        this.addAppealToQueue({
+                            appealId: appealId,
+                            timestamp: Date.now(),
+                            fromAPI: true
+                        });
+                    }, 1000);
+                }
+            }
+        }
+        
+        // Продолжаем стандартную обработку
         if (data.body) {
             const dialogId = this.findDialogIdInObject(data.body);
             const appealId = this.findAppealIdInObject(data.body);
@@ -743,11 +1047,11 @@ class OmniChatTrafficAnalyzer {
             if (appealId) {
                 this.saveAppealId(appealId, dialogId, data);
                 
-                // Check if this is a new appeal notification
+                // Проверяем, является ли это новым обращением
                 if (this.isNewAppealNotification(data)) {
                     console.log('🔔 New appeal detected via API:', appealId);
                     
-                    // Add slight delay to let UI update
+                    // Добавляем небольшую задержку для обновления UI
                     setTimeout(() => {
                         this.checkForExistingAppeals();
                     }, 1000);
@@ -936,8 +1240,9 @@ class OmniChatTrafficAnalyzer {
                     this.appealIds.clear();
                     this.networkLog = [];
                     this.processedAppeals.clear();
+                    this.processedTimestamps.clear();
                     this.appealQueue = [];
-                    chrome.storage.local.remove(['dialogIds', 'appealIds', 'networkLog', 'processedAppeals']);
+                    chrome.storage.local.remove(['dialogIds', 'appealIds', 'networkLog', 'processedAppeals', 'processedTimestamps']);
                     sendResponse({ success: true });
                     break;
                     
@@ -1189,6 +1494,7 @@ class OmniChatTrafficAnalyzer {
                 appealIds: this.appealIds.size,
                 networkEvents: this.networkLog.length,
                 processedAppeals: this.processedAppeals.size,
+                processedTimestamps: this.processedTimestamps.size,
                 queueLength: this.appealQueue.length,
                 isProcessing: this.isProcessingQueue,
                 autoResponse: this.autoResponseEnabled,
@@ -1221,7 +1527,7 @@ class OmniChatTrafficAnalyzer {
             findElements: () => {
                 const elements = {
                     appeals: document.querySelectorAll('.appeal-item, .chat-item, .dialog-item'),
-                    templateButton: document.querySelector('button[title*="шаблон"], button[title*="template"]'),
+                    templateButton: document.querySelector('button[data-testid="choose-templates"]'),
                     sendButton: document.querySelector('button[title*="отправ"], button[title*="send"]'),
                     messageInput: document.querySelector('textarea, [contenteditable="true"]')
                 };
@@ -1231,6 +1537,61 @@ class OmniChatTrafficAnalyzer {
                     templateButton: !!elements.templateButton,
                     sendButton: !!elements.sendButton,
                     messageInput: !!elements.messageInput
+                });
+                
+                return elements;
+            },
+
+            // Метод для поиска селектора шаблонов через тестирование
+            findTemplateElements: async () => {
+                console.log('🔍 Searching for template elements...');
+                
+                const elements = {
+                    templateButton: null,
+                    modal: null,
+                    templates: [],
+                    sendButton: null
+                };
+                
+                // Ищем кнопку шаблонов
+                elements.templateButton = document.querySelector('button[data-testid="choose-templates"]');
+                if (!elements.templateButton) {
+                    // Альтернативные селекторы
+                    const alternativeSelectors = [
+                        'button[title*="шаблон"]',
+                        'button[title*="template"]',
+                        'button[title="Выбрать шаблон"]'
+                    ];
+                    
+                    for (const selector of alternativeSelectors) {
+                        elements.templateButton = document.querySelector(selector);
+                        if (elements.templateButton) break;
+                    }
+                }
+                
+                // Проверяем наличие модального окна
+                elements.modal = document.querySelector('div[data-testid="modal"]');
+                
+                // Ищем шаблоны
+                elements.templates = document.querySelectorAll('div[data-testid="reply-template"]');
+                
+                // Ищем кнопку отправки
+                const sendSelectors = [
+                    'button[title*="Отправить"]',
+                    'button[aria-label*="Отправить"]',
+                    'button[type="submit"]:not([disabled])'
+                ];
+                
+                for (const selector of sendSelectors) {
+                    elements.sendButton = document.querySelector(selector);
+                    if (elements.sendButton) break;
+                }
+                
+                console.log('📊 Found elements:', {
+                    templateButton: !!elements.templateButton,
+                    modal: !!elements.modal,
+                    templatesCount: elements.templates.length,
+                    sendButton: !!elements.sendButton
                 });
                 
                 return elements;
@@ -1259,6 +1620,29 @@ class OmniChatTrafficAnalyzer {
                 const result = await this.sendTemplateMessage();
                 return result ? 'Message sent' : 'Failed to send message';
             },
+
+            // Тест полного цикла
+            testFullCycle: async () => {
+                console.log('🔄 Testing full cycle...');
+                
+                // 1. Открываем селектор шаблонов
+                const opened = await this.openTemplateSelector();
+                if (!opened) return 'Failed at step 1: open template selector';
+                
+                await this.wait(1000);
+                
+                // 2. Выбираем шаблон
+                const selected = await this.selectTemplate();
+                if (!selected) return 'Failed at step 2: select template';
+                
+                await this.wait(1000);
+                
+                // 3. Отправляем сообщение
+                const sent = await this.sendTemplateMessage();
+                if (!sent) return 'Failed at step 3: send message';
+                
+                return '✅ Full cycle completed successfully!';
+            },
             
             // Help
             help: () => {
@@ -1284,6 +1668,20 @@ class OmniChatTrafficAnalyzer {
                 console.log('  omniAnalyzer.testOpenTemplate() - Test template opening');
                 console.log('  omniAnalyzer.testSelectTemplate() - Test template selection');
                 console.log('  omniAnalyzer.testSendMessage() - Test message sending');
+                console.log('  omniAnalyzer.testDeduplication(id) - Test deduplication logic');
+                console.log('  omniAnalyzer.testCooldown(id) - Test cooldown mechanism');
+                console.log('  omniAnalyzer.testMultipleAppeals() - Test multiple appeals handling');
+                console.log('');
+                console.log('🧪 TEST HELPER:');
+                console.log('  omniAnalyzer.checkElements() - Check page elements');
+                console.log('  omniAnalyzer.testOpenModal() - Test modal opening');
+                console.log('  omniAnalyzer.testSelectTemplate() - Test template selection');
+                console.log('  omniAnalyzer.testFullCycleDryRun() - Full cycle test (no send)');
+                console.log('  omniAnalyzer.testFullCycleWithSend() - Full cycle test with send');
+                console.log('  checkElements() - Direct access to test functions');
+                console.log('  testOpenModal() - Direct access');
+                console.log('  testSelectTemplate() - Direct access');
+                console.log('  testFullCycle(false/true) - Direct access');
                 console.log('');
                 console.log('⚙️ CONFIGURATION:');
                 console.log('  omniAnalyzer.getConfig() - Get current config');
@@ -1293,17 +1691,312 @@ class OmniChatTrafficAnalyzer {
                 console.log('  omniAnalyzer.getDialogIds() - Get all dialog IDs');
                 console.log('  omniAnalyzer.getAppealIds() - Get all appeal IDs');
                 console.log('  omniAnalyzer.getProcessedAppeals() - Get processed appeals');
+                console.log('  omniAnalyzer.getProcessedTimestamps() - Get processing timestamps');
                 console.log('  omniAnalyzer.getNetworkLog() - Get network log');
+                console.log('  omniAnalyzer.clearProcessedTimestamps() - Clear all timestamps');
+                console.log('');
+                console.log('📊 APPEAL MONITOR:');
+                console.log('  appealMonitor.start() - Start monitoring');
+                console.log('  appealMonitor.stop() - Stop monitoring');
+                console.log('  appealMonitor.getStats() - Get statistics');
+                console.log('  appealMonitor.listAppeals() - List all appeals');
+                console.log('  appealMonitor.clear() - Clear all data');
+            },
+
+            // AppealMonitor integration commands
+            getAppealMonitorStats: () => {
+                if (window.appealMonitor) {
+                    return window.appealMonitor.getStats();
+                }
+                return 'AppealMonitor not available';
+            },
+
+            listAppealMonitorAppeals: () => {
+                if (window.appealMonitor) {
+                    return window.appealMonitor.listAppeals();
+                }
+                return 'AppealMonitor not available';
+            },
+
+            startAppealMonitor: () => {
+                if (window.appealMonitor) {
+                    window.appealMonitor.start();
+                    return 'AppealMonitor started';
+                }
+                return 'AppealMonitor not available';
+            },
+
+            stopAppealMonitor: () => {
+                if (window.appealMonitor) {
+                    window.appealMonitor.stop();
+                    return 'AppealMonitor stopped';
+                }
+                return 'AppealMonitor not available';
+            },
+
+            // Test Helper integration
+            checkElements: () => {
+                if (typeof checkElements === 'function') {
+                    return checkElements();
+                }
+                return 'Test helper not available';
+            },
+
+            testOpenModal: async () => {
+                if (typeof testOpenModal === 'function') {
+                    return await testOpenModal();
+                }
+                return 'Test helper not available';
+            },
+
+            testSelectTemplate: async () => {
+                if (typeof testSelectTemplate === 'function') {
+                    return await testSelectTemplate();
+                }
+                return 'Test helper not available';
+            },
+
+            testFullCycleDryRun: async () => {
+                if (typeof testFullCycle === 'function') {
+                    return await testFullCycle(false);
+                }
+                return 'Test helper not available';
+            },
+
+            testFullCycleWithSend: async () => {
+                if (typeof testFullCycle === 'function') {
+                    return await testFullCycle(true);
+                }
+                return 'Test helper not available';
+            },
+
+            // Тестирование дедупликации
+            testDeduplication: (appealId) => {
+                const testId = appealId || 'TEST-' + Date.now();
+                console.log('🧪 Testing deduplication for:', testId);
+                
+                // Попытка 1
+                const result1 = this.isAppealEligibleForProcessing(testId);
+                console.log('   First check:', result1 ? 'ELIGIBLE' : 'BLOCKED');
+                
+                // Добавляем в processed
+                this.processedAppeals.add(testId);
+                this.processedTimestamps.set(testId, Date.now());
+                
+                // Попытка 2
+                const result2 = this.isAppealEligibleForProcessing(testId);
+                console.log('   Second check (after processing):', result2 ? 'ELIGIBLE' : 'BLOCKED');
+                
+                // Очистка для теста
+                this.processedAppeals.delete(testId);
+                this.processedTimestamps.delete(testId);
+                
+                return {
+                    appealId: testId,
+                    firstCheck: result1,
+                    secondCheck: result2,
+                    expected: 'first: true, second: false'
+                };
+            },
+
+            testCooldown: (appealId) => {
+                const testId = appealId || 'COOLDOWN-' + Date.now();
+                console.log('🧪 Testing cooldown for:', testId);
+                
+                // Тест 1: timestamp 30 минут назад (должен быть заблокирован)
+                const thirtyMinutesAgo = Date.now() - 30 * 60 * 1000;
+                this.processedTimestamps.set(testId, thirtyMinutesAgo);
+                
+                const result1 = this.isAppealEligibleForProcessing(testId);
+                console.log('   Cooldown check (30 min ago):', result1 ? 'ELIGIBLE' : 'BLOCKED');
+                
+                // Тест 2: timestamp 3 часа назад (должен быть разрешен)
+                const threeHoursAgo = Date.now() - 3 * 60 * 60 * 1000;
+                this.processedTimestamps.set(testId + '-OLD', threeHoursAgo);
+                
+                const result2 = this.isAppealEligibleForProcessing(testId + '-OLD');
+                console.log('   Cooldown check (3 hours ago):', result2 ? 'ELIGIBLE' : 'BLOCKED');
+                
+                // Очистка
+                this.processedTimestamps.delete(testId);
+                this.processedTimestamps.delete(testId + '-OLD');
+                
+                return {
+                    appealId: testId,
+                    recentResult: result1,
+                    oldResult: result2,
+                    expected: 'recent: BLOCKED, old: ELIGIBLE (2 hour cooldown)'
+                };
+            },
+
+            getProcessedTimestamps: () => {
+                const timestamps = {};
+                for (const [appealId, timestamp] of this.processedTimestamps.entries()) {
+                    timestamps[appealId] = {
+                        timestamp: timestamp,
+                        age: Math.round((Date.now() - timestamp) / 1000) + 's ago',
+                        date: new Date(timestamp).toLocaleString()
+                    };
+                }
+                return timestamps;
+            },
+
+            clearProcessedTimestamps: () => {
+                const size = this.processedTimestamps.size;
+                this.processedTimestamps.clear();
+                return `Cleared ${size} timestamps`;
+            },
+
+            // Тестирование множественных обращений
+            testMultipleAppeals: () => {
+                console.log('🧪 Testing multiple appeals scenario...');
+                
+                const testAppeals = [
+                    'MULTI-1-' + Date.now(),
+                    'MULTI-2-' + Date.now(),
+                    'MULTI-3-' + Date.now()
+                ];
+                
+                const results = [];
+                
+                testAppeals.forEach((appealId, index) => {
+                    console.log(`   Testing appeal ${index + 1}: ${appealId}`);
+                    
+                    // Первая проверка - все должны быть eligible
+                    const eligible = this.isAppealEligibleForProcessing(appealId);
+                    console.log(`     Eligible: ${eligible}`);
+                    
+                    if (eligible) {
+                        // Добавляем в очередь
+                        this.addAppealToQueue({
+                            appealId: appealId,
+                            timestamp: Date.now(),
+                            test: true
+                        });
+                        
+                        // Симулируем обработку
+                        this.processedAppeals.add(appealId);
+                        this.processedTimestamps.set(appealId, Date.now());
+                    }
+                    
+                    results.push({
+                        appealId: appealId,
+                        eligible: eligible,
+                        inQueue: this.appealQueue.some(a => a.appealId === appealId),
+                        processed: this.processedAppeals.has(appealId)
+                    });
+                });
+                
+                // Попытка повторного добавления
+                console.log('   Testing duplicate addition...');
+                const duplicateResults = testAppeals.map(appealId => {
+                    const eligible = this.isAppealEligibleForProcessing(appealId);
+                    console.log(`     ${appealId} duplicate check: ${eligible ? 'ELIGIBLE' : 'BLOCKED'}`);
+                    return eligible;
+                });
+                
+                // Очистка тестовых данных
+                testAppeals.forEach(appealId => {
+                    this.processedAppeals.delete(appealId);
+                    this.processedTimestamps.delete(appealId);
+                    this.appealQueue = this.appealQueue.filter(a => a.appealId !== appealId);
+                });
+                
+                return {
+                    testAppeals: testAppeals,
+                    initialResults: results,
+                    duplicateResults: duplicateResults,
+                    queueLength: this.appealQueue.length,
+                    expected: 'all initial should be eligible, all duplicates should be blocked'
+                };
             }
         };
         
         console.log('🛠️ Debug interface available at: window.omniAnalyzer');
         console.log('🔧 Type "omniAnalyzer.help()" for available commands');
     }
+
+    logCurrentState() {
+        console.log('📸 Current page state:');
+        
+        const state = {
+            url: window.location.href,
+            templateButton: !!document.querySelector('button[data-testid="choose-templates"]'),
+            modal: !!document.querySelector('div[data-testid="modal"]'),
+            templates: document.querySelectorAll('div[data-testid="reply-template"]').length,
+            messageInput: !!document.querySelector('textarea'),
+            sendButton: !!document.querySelector('button[title*="Отправить"]')
+        };
+        
+        console.table(state);
+        
+        // Проверяем наличие ошибок в консоли
+        const errors = document.querySelectorAll('.error-message, .alert-danger, [role="alert"]');
+        if (errors.length > 0) {
+            console.log('⚠️ Error messages found on page:', errors.length);
+            errors.forEach(err => console.log('  -', err.textContent));
+        }
+    }
 }
 
 // Initialize analyzer
 const analyzer = new OmniChatTrafficAnalyzer();
+
+// Интеграция с AppealMonitor
+if (window.appealMonitor) {
+    console.log('🔗 Integrating with AppealMonitor...');
+    
+    // Подключаем обработчик новых обращений из AppealMonitor
+    const originalOnNewAppeal = window.appealMonitor.onNewAppeal.bind(window.appealMonitor);
+    window.appealMonitor.onNewAppeal = function(appealInfo) {
+        // Вызываем оригинальный обработчик
+        originalOnNewAppeal(appealInfo);
+        
+        // Добавляем обращение в очередь основного анализатора
+        if (analyzer.autoResponseEnabled && appealInfo.status === 'new' && analyzer.isAppealEligibleForProcessing(appealInfo.id)) {
+            console.log('📤 AppealMonitor -> OmniAnalyzer: Adding appeal to queue:', appealInfo.id);
+            analyzer.addAppealToQueue({
+                appealId: appealInfo.id,
+                element: appealInfo.element,
+                timestamp: Date.now(),
+                source: 'appealMonitor'
+            });
+        }
+    };
+} else {
+    // Если AppealMonitor еще не загружен, ждем его
+    setTimeout(() => {
+        if (window.appealMonitor) {
+            console.log('🔗 Late integration with AppealMonitor...');
+            const originalOnNewAppeal = window.appealMonitor.onNewAppeal.bind(window.appealMonitor);
+            window.appealMonitor.onNewAppeal = function(appealInfo) {
+                originalOnNewAppeal(appealInfo);
+                if (analyzer.autoResponseEnabled && appealInfo.status === 'new' && analyzer.isAppealEligibleForProcessing(appealInfo.id)) {
+                    console.log('📤 AppealMonitor -> OmniAnalyzer: Adding appeal to queue:', appealInfo.id);
+                    analyzer.addAppealToQueue({
+                        appealId: appealInfo.id,
+                        element: appealInfo.element,
+                        timestamp: Date.now(),
+                        source: 'appealMonitor'
+                    });
+                }
+            };
+        }
+    }, 1000);
+}
+
 console.log('✅ OmniChat Traffic Analyzer v4.0 loaded!');
 console.log('🤖 Template-based auto-response:', analyzer.autoResponseEnabled ? 'ENABLED' : 'DISABLED');
-console.log('💡 Use window.omniAnalyzer for debug commands');
+
+// Проверяем интеграцию с дополнительными модулями
+setTimeout(() => {
+    const modules = [];
+    if (window.appealMonitor) modules.push('📊 AppealMonitor');
+    if (typeof checkElements === 'function') modules.push('🧪 TestHelper');
+    
+    if (modules.length > 0) {
+        console.log('🔗 Integrated modules:', modules.join(', '));
+    }
+    
+    console.log('💡 Use window.omniAnalyzer.help() for all available commands');
+}, 1000);
