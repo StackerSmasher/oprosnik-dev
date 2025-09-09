@@ -20,10 +20,10 @@ class AppealMonitor {
         // Первая проверка
         this.checkForAppeals();
         
-        // Проверка каждые 2 секунды
+        // Проверка каждые 10 секунд (уменьшаем частоту)
         this.checkInterval = setInterval(() => {
             this.checkForAppeals();
-        }, 2000);
+        }, 10000);
         
         // Также слушаем сетевые запросы
         this.interceptNetwork();
@@ -172,8 +172,24 @@ class AppealMonitor {
                 if (!this.appeals.has(appealInfo.id)) {
                     // Новое обращение!
                     this.appeals.set(appealInfo.id, appealInfo);
-                    console.log('🆕 New appeal detected:', appealInfo);
-                    this.onNewAppeal(appealInfo);
+                    console.log('🆕 New appeal detected:', appealInfo.id, 'Status:', appealInfo.status);
+                    // Ограничиваем вызов onNewAppeal только для новых обращений
+                    if (appealInfo.status === 'new') {
+                        this.onNewAppeal(appealInfo);
+                        
+                        // Уведомляем OmniAnalyzer о наличии нового обращения
+                        // Но НЕ добавляем его напрямую в очередь
+                        if (window.omniAnalyzer) {
+                            console.log('📣 AppealMonitor: Notifying OmniAnalyzer about new appeal');
+                            // Можно тригернуть проверку через короткое время
+                            setTimeout(() => {
+                                if (window.omniAnalyzer && window.omniAnalyzer.autoResponseEnabled) {
+                                    console.log('🔍 Triggering OmniAnalyzer appeal check...');
+                                    window.omniAnalyzer.checkForExistingAppeals();
+                                }
+                            }, 1000);
+                        }
+                    }
                 } else {
                     // Обновляем информацию
                     const existing = this.appeals.get(appealInfo.id);
@@ -454,10 +470,16 @@ class AppealMonitor {
         console.log('  Status:', appealInfo.status);
         console.log('  Text preview:', appealInfo.text);
         
-        // Если есть OmniAnalyzer, добавляем в очередь
+        // ОТКЛЮЧЕНО: ПРЕДОТВРАЩЕНИЕ ДУБЛИРОВАНИЯ
+        // AppealMonitor теперь только обнаруживает обращения
+        // Обработка происходит только через OmniAnalyzer.checkForExistingAppeals()
+        
         if (window.omniAnalyzer) {
-            console.log('📤 Adding to OmniAnalyzer queue...');
-            omniAnalyzer.processManual(appealInfo.id);
+            console.log('📝 AppealMonitor: New appeal detected, but NOT adding to queue to prevent duplication');
+            console.log('    OmniAnalyzer will pick it up during periodic check');
+            console.log('    Appeal ID:', appealInfo.id, 'Status:', appealInfo.status);
+        } else {
+            console.log('⚠️ OmniAnalyzer not available, appeal detection only');
         }
         
         // Визуальное выделение элемента
@@ -493,9 +515,68 @@ class AppealMonitor {
             
             // Шаг 2: Открыть модальное окно шаблонов
             console.log('Step 2: Opening template modal...');
-            const templateButton = document.querySelector('button[data-testid="choose-templates"]');
+            
+            // Расширенный поиск кнопки шаблонов
+            const templateButtonSelectors = [
+                'button[data-testid="choose-templates"]',
+                'button[title*="шаблон"]',
+                'button[title*="Шаблон"]',
+                'button[title*="template"]',
+                'button[title="Выбрать шаблон"]',
+                'button[aria-label*="шаблон"]',
+                // Поиск по содержимому
+                'button:has(span:contains("Шаблон"))',
+                'button:has(span:contains("шаблон"))',
+                // По визуальным признакам (среди кнопок отправки)
+                '.message-input-container button:not([disabled])',
+                '.input-container button:not([disabled])',
+                '.chat-input button:not([disabled])'
+            ];
+            
+            let templateButton = null;
+            
+            for (const selector of templateButtonSelectors) {
+                try {
+                    templateButton = document.querySelector(selector);
+                    if (templateButton) {
+                        console.log('✅ Template button found with selector:', selector);
+                        break;
+                    }
+                } catch (e) {
+                    // Некорректный селектор
+                }
+            }
+            
+            // Если не нашли по селекторам, ищем по тексту
             if (!templateButton) {
-                throw new Error('Template button not found');
+                console.log('⚠️ Searching template button by text...');
+                const allButtons = document.querySelectorAll('button:not([disabled])');
+                
+                for (const button of allButtons) {
+                    const buttonText = button.textContent?.toLowerCase() || '';
+                    const title = button.title?.toLowerCase() || '';
+                    
+                    if (buttonText.includes('шаблон') || 
+                        title.includes('шаблон') ||
+                        buttonText.includes('template') ||
+                        title.includes('template')) {
+                        templateButton = button;
+                        console.log('✅ Template button found by text:', buttonText || title);
+                        break;
+                    }
+                }
+            }
+            
+            if (!templateButton) {
+                // Последняя попытка - логируем все доступные кнопки
+                console.log('⚠️ Template button not found. Available buttons:');
+                const allButtons = document.querySelectorAll('button');
+                allButtons.forEach((btn, index) => {
+                    if (index < 10) { // Показываем первые 10
+                        console.log(`  ${index + 1}. "${btn.textContent?.trim()}" title="${btn.title}" testid="${btn.getAttribute('data-testid')}"`);
+                    }
+                });
+                throw new Error('Template button not found after extensive search');
             }
             
             templateButton.click();
@@ -717,7 +798,7 @@ class AppealMonitor {
 // Создаем глобальный экземпляр монитора
 window.appealMonitor = new AppealMonitor();
 
-console.log('\n📊 APPEAL MONITOR READY\n');
+console.log('\n📊 APPEAL MONITOR READY (MANUAL MODE)\n');
 console.log('Basic Commands:');
 console.log('  appealMonitor.start()                - Start monitoring');
 console.log('  appealMonitor.stop()                 - Stop monitoring');
@@ -739,7 +820,15 @@ console.log('\n🚀 Quick Start:');
 console.log('  1. appealMonitor.diagnoseAppeals()   - Check if appeals are detected');
 console.log('  2. appealMonitor.testSendTemplate()  - Test the full process (safe)');
 console.log('  3. appealMonitor.quickSendTemplate() - Send template to active appeal');
-console.log('\n💡 Auto-start monitoring...');
+console.log('\n🔄 CONTROLLED AUTO-MONITORING ENABLED');
+console.log('\n💡 New appeals will be detected and processed automatically (with spam protection)');
 
-// Автоматически запускаем мониторинг
-window.appealMonitor.start();
+// КОНТРОЛИРУЕМЫЙ АВТОМАТИЧЕСКИЙ ЗАПУСК
+// Без спама, но с обнаружением
+setTimeout(() => {
+    window.appealMonitor.start();
+    console.log('✅ AppealMonitor started in controlled mode');
+}, 2000);
+
+console.log('\n🚫 Spam protection: Active (controlled processing only)');
+console.log('Manual commands still available: appealMonitor.stop(), appealMonitor.quickSendTemplate()');
