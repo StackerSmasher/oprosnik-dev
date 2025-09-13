@@ -19,6 +19,10 @@ class OmniChatTrafficAnalyzer {
         this.sessionProcessedCount = 0; // Количество обработанных в текущей сессии
         this.currentlyProcessingAppeal = null; // ID текущего обращения
         
+        // Debouncing mechanism
+        this.clickDebounceMap = new Map(); // Track recent clicks to prevent duplicates
+        this.debounceDelay = 1000; // 1 second debounce
+        
         // Template response configuration
         this.templateConfig = {
             responseDelay: 2000, // Delay before processing
@@ -27,6 +31,13 @@ class OmniChatTrafficAnalyzer {
             templateTitle: '1.1 Приветствие', // Заголовок шаблона для поиска
             maxRetries: 3,
             cooldownPeriod: 24 * 60 * 60 * 1000 // 24 часа - время блокировки повторной отправки приветствия
+        };
+        
+        // Improved synchronization with AppealMonitor
+        this.appealMonitorSync = {
+            lastCheckTime: 0,
+            pendingCheck: false,
+            checkDelay: 2000 // 2 seconds delay for batching
         };
         
         this.init();
@@ -175,33 +186,22 @@ class OmniChatTrafficAnalyzer {
 
     extractAppealIdFromElement(element) {
         // Try various methods to extract appeal ID
-        
-        // Method 1: Data attributes
-        const dataAppealId = element.dataset?.appealId || 
-                           element.dataset?.appealid || 
+
+        // Method 1: Data attributes (приоритет для реальных ID)
+        const dataAppealId = element.dataset?.appealId ||
+                           element.dataset?.appealid ||
                            element.getAttribute('data-appeal-id');
         if (dataAppealId) return dataAppealId;
 
-        // Method 2: Специальная обработка для appeal-preview элементов
-        if (element.getAttribute('data-testid') === 'appeal-preview') {
-            // Для appeal-preview используем имя клиента как ID
-            const nameElement = element.querySelector('.sc-hSWyVn.jLoqEI, [title]');
-            if (nameElement) {
-                const name = nameElement.textContent?.trim() || nameElement.getAttribute('title');
-                if (name) {
-                    // Преобразуем в безопасный ID
-                    return name.replace(/\s+/g, '_').replace(/[^\wа-яА-Я_-]/gi, '');
-                }
-            }
-        }
-
-        // Method 3: Text content patterns
+        // Method 2: Text content patterns (ПРИОРИТЕТ для номеров обращений)
         const text = element.textContent || '';
         const patterns = [
-            /Appeal[:\s#]+(\d+)/i,
-            /Обращение[:\s#]+(\d+)/i,
-            /#(\d{5,})/,
-            /ID[:\s]+(\d+)/i
+            /Обращение\s*№\s*(\d+)/i,        // "Обращение № 123456"
+            /Обращение[:\s#]+(\d+)/i,        // "Обращение: 123456" или "Обращение #123456"
+            /Appeal[:\s#№]+(\d+)/i,          // "Appeal: 123456" или "Appeal № 123456"
+            /#(\d{5,})/,                     // "#123456" (минимум 5 цифр)
+            /ID[:\s]+(\d+)/i,                // "ID: 123456"
+            /№\s*(\d{5,})/                   // "№ 123456" (минимум 5 цифр)
         ];
 
         for (const pattern of patterns) {
@@ -209,19 +209,42 @@ class OmniChatTrafficAnalyzer {
             if (match) return match[1];
         }
 
-        // Method 4: ID attribute
+        // Method 3: ID attribute
         if (element.id && element.id.includes('appeal')) {
             const idMatch = element.id.match(/\d+/);
             if (idMatch) return idMatch[0];
         }
-        
-        // Method 5: Генерируем ID на основе текста (как последний ресурс)
-        if (text && text.length > 10) {
-            // Используем первые слова как ID
-            const words = text.trim().split(/\s+/).slice(0, 3).join('_');
-            if (words.length > 3) {
-                return words.replace(/[^\wа-яА-Я_-]/gi, '').substring(0, 50);
+
+        // Method 4: Поиск в дочерних элементах для более сложных структур
+        const childElements = element.querySelectorAll('*');
+        for (const child of childElements) {
+            const childText = child.textContent || '';
+            for (const pattern of patterns) {
+                const match = childText.match(pattern);
+                if (match) return match[1];
             }
+        }
+
+        // Method 5: Проверка таймера для определения новизны (не для ID)
+        // Это поможет в логировании
+        const timerContainer = element.querySelector('.sc-cewOZc.ioQCCB span') ||
+                              element.querySelector('div[class*="sc-cewOZc"] span');
+
+        if (timerContainer) {
+            const timerText = timerContainer.textContent || '';
+            const timerMatch = timerText.match(/(\d+)\s*сек/i);
+            if (timerMatch) {
+                const seconds = parseInt(timerMatch[1]);
+                if (seconds < 60) {
+                    console.log('⏰ Found timer in appeal element:', seconds, 'seconds - this will be marked as new');
+                }
+            }
+        }
+
+        // Method 6: Последний ресурс - только если найден числовой ID
+        const numericMatch = text.match(/\b(\d{5,})\b/);
+        if (numericMatch) {
+            return numericMatch[1];
         }
 
         return null;
@@ -229,8 +252,47 @@ class OmniChatTrafficAnalyzer {
 
     isNewAppeal(element) {
         // Check indicators that this is a new/unread appeal
-        
-        // Check for unread indicators
+
+        // ПРИОРИТЕТ 1: Проверка таймера (если есть таймер МЕНЬШЕ 60 секунд - это новое обращение)
+
+        // Сначала ищем специфическую структуру таймера
+        const timerContainer = element.querySelector('.sc-cewOZc.ioQCCB span') ||
+                              element.querySelector('div[class*="sc-cewOZc"] span') ||
+                              element.querySelector('span:contains("сек")');
+
+        if (timerContainer) {
+            const timerText = timerContainer.textContent || '';
+            const timerMatch = timerText.match(/(\d+)\s*сек/i);
+            if (timerMatch) {
+                const seconds = parseInt(timerMatch[1]);
+                if (seconds < 60) {
+                    console.log('🔥 Content.js: Found timer in specific structure - marking as new:', seconds, 'seconds');
+                    return true;
+                }
+            }
+        }
+
+        // Поиск таймера в общем тексте (резервный метод)
+        const text = element.textContent || '';
+        const timerPatterns = [
+            /(\d+)\s*сек/i,                 // "45 сек", "792 сек"
+            /(\d{1,2})\s*с\b/i,             // "45с", "59 с" (но не "792с")
+            /(\d{1,2})\s*sec/i,             // "45sec"
+            /0:(\d{2})/,                    // "0:45"
+        ];
+
+        for (const pattern of timerPatterns) {
+            const match = text.match(pattern);
+            if (match) {
+                const seconds = parseInt(match[1]);
+                if (seconds < 60) {
+                    console.log('🔥 Content.js: Found timer in text - marking as new:', seconds, 'seconds');
+                    return true;
+                }
+            }
+        }
+
+        // ПРИОРИТЕТ 2: Check for unread indicators
         const unreadIndicators = [
             '.unread',
             '.new',
@@ -246,15 +308,15 @@ class OmniChatTrafficAnalyzer {
             }
         }
 
-        // Check for specific classes
+        // ПРИОРИТЕТ 3: Check for specific classes
         const classList = element.className || '';
-        if (classList.includes('unread') || 
-            classList.includes('new') || 
+        if (classList.includes('unread') ||
+            classList.includes('new') ||
             classList.includes('pending')) {
             return true;
         }
 
-        // Check for bold text (often indicates unread)
+        // ПРИОРИТЕТ 4: Check for bold text (often indicates unread)
         const fontWeight = window.getComputedStyle(element).fontWeight;
         if (fontWeight === 'bold' || parseInt(fontWeight) >= 600) {
             return true;
@@ -402,8 +464,8 @@ class OmniChatTrafficAnalyzer {
 
     // ===== QUEUE MANAGEMENT =====
     addAppealToQueue(appeal) {
-        // Усиленная проверка: глобальный lock на 5 секунд для любого добавления
-        if (window.globalQueueLock && Date.now() - window.globalQueueLock < 5000) {
+        // Усиленная проверка: глобальный lock на 30 секунд для любого добавления
+        if (window.globalQueueLock && Date.now() - window.globalQueueLock < 30000) {
             console.log('⏳ Global lock active, skipping add to queue');
             return false;
         }
@@ -550,10 +612,39 @@ class OmniChatTrafficAnalyzer {
         
         console.log('🤖 Starting template response for appeal:', appeal.appealId);
         
-        // Step 0: Проверяем, что мы на правильной странице
+        // Step 0: Comprehensive pre-send validation
+        console.log('🔍 Step 0: Running pre-send validation checks...');
+        
         if (!window.location.href.includes('omnichat.rt.ru')) {
             throw new Error('Not on OmniChat page');
         }
+        
+        // Validate appeal data
+        if (!appeal.appealId || appeal.appealId.trim().length === 0) {
+            throw new Error('Invalid appeal ID');
+        }
+        
+        // Check if UI is ready
+        const requiredElements = {
+            messageInput: document.querySelector('textarea[placeholder*="Введите"], input[placeholder*="сообщение"], div[contenteditable="true"]'),
+            templateButton: document.querySelector('button[data-testid="choose-templates"]') || document.querySelector('button[title*="шаблон"]')
+        };
+        
+        if (!requiredElements.messageInput) {
+            throw new Error('Message input field not found - UI not ready');
+        }
+        
+        if (!requiredElements.templateButton) {
+            throw new Error('Template button not found - UI not ready');
+        }
+        
+        // Check if we're in the right conversation context
+        const conversationIndicators = document.querySelectorAll('[data-testid*="conversation"], .conversation-title, .chat-header');
+        if (conversationIndicators.length === 0) {
+            console.log('⚠️ No conversation context indicators found');
+        }
+        
+        console.log('✅ Pre-send validation passed');
         
         // Step 1: Выбираем обращение (если есть элемент)
         if (appeal.element) {
@@ -690,8 +781,29 @@ class OmniChatTrafficAnalyzer {
             await this.wait(300);
         }
         
-        // Step 4: Отправляем сообщение
-        console.log('📤 Step 4: Sending message...');
+        // Step 4: Final validation before sending message
+        console.log('📤 Step 4: Final validation and sending message...');
+        
+        // Final validation checks
+        const messageInputFinal = document.querySelector('textarea') || 
+                                 document.querySelector('[contenteditable="true"]') ||
+                                 document.querySelector('div[role="textbox"]');
+        
+        if (!messageInputFinal) {
+            throw new Error('Final validation failed: Message input not found');
+        }
+        
+        const finalText = messageInputFinal.value || messageInputFinal.textContent || messageInputFinal.innerText;
+        if (!finalText || finalText.trim().length === 0) {
+            throw new Error('Final validation failed: No message text to send');
+        }
+        
+        if (finalText.trim().length < 10) {
+            throw new Error('Final validation failed: Message text too short');
+        }
+        
+        console.log('✅ Final validation passed, message ready to send');
+        console.log('📝 Final message preview:', finalText.substring(0, 100) + (finalText.length > 100 ? '...' : ''));
         
         // Ищем кнопку отправки
         const sendButtonSelectors = [
@@ -738,13 +850,16 @@ class OmniChatTrafficAnalyzer {
                 throw new Error('No send button and no message input found');
             }
         } else {
-            // Кликаем на кнопку отправки
-            sendButton.click();
+            // Check debouncing before clicking
+            const buttonId = 'send-button';
+            if (this.isClickDebounced(buttonId)) {
+                console.log('⏳ Send button click debounced, skipping');
+                return;
+            }
             
-            // Дополнительные события для надежности
-            sendButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-            sendButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-            sendButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            // Кликаем на кнопку отправки (убираем дублирующие события)
+            sendButton.click();
+            this.recordClick(buttonId);
             
             console.log('✅ Send button clicked');
         }
@@ -842,15 +957,13 @@ class OmniChatTrafficAnalyzer {
             appeal.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
             await this.wait(300);
             
-            // Try multiple click methods for reliability
+            // Click appeal element (single click to prevent duplicates)
             appeal.element.click();
-            appeal.element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
             
-            // Also try to click any clickable child
+            // Try clicking any clickable child if direct click doesn't work
             const clickable = appeal.element.querySelector('a, button, [role="button"], [data-testid*="item"]');
             if (clickable) {
                 clickable.click();
-                clickable.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
             }
             
             await this.wait(500);
@@ -2081,6 +2194,8 @@ class OmniChatTrafficAnalyzer {
                 console.log('  omniAnalyzer.testDeduplication(id) - Test deduplication logic');
                 console.log('  omniAnalyzer.testCooldown(id) - Test cooldown mechanism');
                 console.log('  omniAnalyzer.testMultipleAppeals() - Test multiple appeals handling');
+                console.log('  omniAnalyzer.testIdExtraction() - Test appeal ID extraction patterns');
+                console.log('  omniAnalyzer.testTimerDetection() - Test timer detection in appeals');
                 console.log('');
                 console.log('🧪 TEST HELPER:');
                 console.log('  omniAnalyzer.checkElements() - Check page elements');
@@ -2386,6 +2501,227 @@ class OmniChatTrafficAnalyzer {
                     queueLength: this.appealQueue.length,
                     expected: 'all initial should be eligible, all duplicates should be blocked'
                 };
+            },
+
+            // Тестирование новой логики извлечения appealId
+            testIdExtraction: () => {
+                console.log('🧪 Testing appeal ID extraction patterns...');
+
+                // Создаем тестовые элементы с различными паттернами
+                const testCases = [
+                    {
+                        name: 'Обращение № 123456',
+                        html: '<div>Обращение № 123456 от клиента</div>',
+                        expected: '123456'
+                    },
+                    {
+                        name: 'Обращение: 789012',
+                        html: '<div>Обращение: 789012 Петров И.И.</div>',
+                        expected: '789012'
+                    },
+                    {
+                        name: 'Appeal #345678',
+                        html: '<div>Appeal #345678 status: new</div>',
+                        expected: '345678'
+                    },
+                    {
+                        name: 'ID: 901234',
+                        html: '<div>ID: 901234</div>',
+                        expected: '901234'
+                    },
+                    {
+                        name: '№ 567890',
+                        html: '<div>№ 567890</div>',
+                        expected: '567890'
+                    },
+                    {
+                        name: 'Data attribute',
+                        html: '<div data-appeal-id="111222">Some appeal</div>',
+                        expected: '111222'
+                    },
+                    {
+                        name: 'Nested number',
+                        html: '<div><span>Обращение № 333444</span> content</div>',
+                        expected: '333444'
+                    }
+                ];
+
+                const results = [];
+
+                testCases.forEach(testCase => {
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = testCase.html;
+                    const element = tempDiv.firstElementChild;
+
+                    const extracted = this.extractAppealIdFromElement(element);
+                    const success = extracted === testCase.expected;
+
+                    results.push({
+                        name: testCase.name,
+                        expected: testCase.expected,
+                        extracted: extracted,
+                        success: success
+                    });
+
+                    console.log(`${success ? '✅' : '❌'} ${testCase.name}: expected "${testCase.expected}", got "${extracted}"`);
+                });
+
+                const successful = results.filter(r => r.success).length;
+                const total = results.length;
+
+                console.log(`\n📊 Test Results: ${successful}/${total} tests passed`);
+
+                return {
+                    results: results,
+                    summary: `${successful}/${total} tests passed`,
+                    success: successful === total
+                };
+            },
+
+            // Тестирование логики обнаружения таймера
+            testTimerDetection: () => {
+                console.log('🧪 Testing timer detection in appeals...');
+
+                const timerTestCases = [
+                    {
+                        name: 'Real timer structure (45 сек)',
+                        html: '<div class="appeal-card"><div class="sc-cewOZc ioQCCB"><span>45 сек</span><svg>...</svg></div><span>Иванов И.И.</span></div>',
+                        expectedTimer: true,
+                        expectedSeconds: 45
+                    },
+                    {
+                        name: 'Real timer structure (30 сек)',
+                        html: '<div><div class="sc-cewOZc ioQCCB"><span>30 сек</span></div></div>',
+                        expectedTimer: true,
+                        expectedSeconds: 30
+                    },
+                    {
+                        name: 'Timer > 60 seconds (should be false)',
+                        html: '<div class="sc-cewOZc ioQCCB"><span>792 сек</span></div>',
+                        expectedTimer: false,
+                        expectedSeconds: null
+                    },
+                    {
+                        name: 'Timer 0:45 format',
+                        html: '<div>Петров П.П. 0:45</div>',
+                        expectedTimer: true,
+                        expectedSeconds: 45
+                    },
+                    {
+                        name: 'Timer 59 сек (boundary)',
+                        html: '<div>Сидоров С.С. 59 сек</div>',
+                        expectedTimer: true,
+                        expectedSeconds: 59
+                    },
+                    {
+                        name: 'Timer 60 сек (should be false)',
+                        html: '<div>Кузнецов К.К. 60 сек</div>',
+                        expectedTimer: false,
+                        expectedSeconds: null
+                    },
+                    {
+                        name: 'No timer',
+                        html: '<div>Иванов И.И. Новое сообщение</div>',
+                        expectedTimer: false,
+                        expectedSeconds: null
+                    },
+                    {
+                        name: 'Badge indicator only',
+                        html: '<div>Петров П.П. <span class="badge">●</span></div>',
+                        expectedTimer: false,
+                        expectedSeconds: null
+                    },
+                    {
+                        name: 'Timer with appeal ID',
+                        html: '<div>Обращение № 123456 <div class="sc-cewOZc ioQCCB"><span>55 сек</span></div></div>',
+                        expectedTimer: true,
+                        expectedSeconds: 55
+                    }
+                ];
+
+                const results = [];
+
+                timerTestCases.forEach(testCase => {
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = testCase.html;
+                    const element = tempDiv.firstElementChild;
+
+                    const isNew = this.isNewAppeal(element);
+                    const extractedId = this.extractAppealIdFromElement(element);
+
+                    // Проверяем наличие таймера в специфической структуре
+                    const timerContainer = element.querySelector('.sc-cewOZc.ioQCCB span') ||
+                                          element.querySelector('div[class*="sc-cewOZc"] span');
+
+                    let foundTimer = false;
+                    let foundSeconds = null;
+
+                    if (timerContainer) {
+                        const timerText = timerContainer.textContent || '';
+                        const timerMatch = timerText.match(/(\d+)\s*сек/i);
+                        if (timerMatch) {
+                            const seconds = parseInt(timerMatch[1]);
+                            if (seconds < 60) {
+                                foundTimer = true;
+                                foundSeconds = seconds;
+                            }
+                        }
+                    }
+
+                    // Резервный поиск в общем тексте
+                    if (!foundTimer) {
+                        const text = element.textContent || '';
+                        const timerPatterns = [
+                            /(\d+)\s*сек/i,                 // "45 сек"
+                            /(\d{1,2})\s*с\b/i,             // "45с" (но не "792с")
+                            /(\d{1,2})\s*sec/i,             // "45sec"
+                            /0:(\d{2})/,                    // "0:45"
+                        ];
+
+                        for (const pattern of timerPatterns) {
+                            const match = text.match(pattern);
+                            if (match) {
+                                const seconds = parseInt(match[1]);
+                                if (seconds < 60) {
+                                    foundTimer = true;
+                                    foundSeconds = seconds;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    const timerSuccess = foundTimer === testCase.expectedTimer;
+                    const secondsSuccess = foundSeconds === testCase.expectedSeconds;
+                    const overallSuccess = timerSuccess && secondsSuccess;
+
+                    results.push({
+                        name: testCase.name,
+                        expectedTimer: testCase.expectedTimer,
+                        foundTimer: foundTimer,
+                        expectedSeconds: testCase.expectedSeconds,
+                        foundSeconds: foundSeconds,
+                        isNew: isNew,
+                        extractedId: extractedId,
+                        success: overallSuccess
+                    });
+
+                    console.log(`${overallSuccess ? '✅' : '❌'} ${testCase.name}:`);
+                    console.log(`    Timer: expected ${testCase.expectedTimer}, got ${foundTimer}`);
+                    console.log(`    Seconds: expected ${testCase.expectedSeconds}, got ${foundSeconds}`);
+                    console.log(`    IsNew: ${isNew}, ExtractedID: ${extractedId}`);
+                });
+
+                const successful = results.filter(r => r.success).length;
+                const total = results.length;
+
+                console.log(`\n📊 Timer Test Results: ${successful}/${total} tests passed`);
+
+                return {
+                    results: results,
+                    summary: `${successful}/${total} tests passed`,
+                    success: successful === total
+                };
             }
         };
         
@@ -2414,15 +2750,77 @@ class OmniChatTrafficAnalyzer {
             errors.forEach(err => console.log('  -', err.textContent));
         }
     }
+
+    // ===== DEBOUNCING METHODS =====
+    isClickDebounced(elementId) {
+        const lastClick = this.clickDebounceMap.get(elementId);
+        if (!lastClick) return false;
+        
+        const timeSinceLastClick = Date.now() - lastClick;
+        return timeSinceLastClick < this.debounceDelay;
+    }
+    
+    recordClick(elementId) {
+        this.clickDebounceMap.set(elementId, Date.now());
+        
+        // Clean up old entries to prevent memory leaks
+        setTimeout(() => {
+            this.clickDebounceMap.delete(elementId);
+        }, this.debounceDelay * 2);
+    }
+
+    // ===== IMPROVED SYNCHRONIZATION METHODS =====
+    requestAppealCheck(source = 'unknown') {
+        console.log(`🔄 Appeal check requested by: ${source}`);
+        
+        // Prevent rapid consecutive checks
+        const now = Date.now();
+        if (now - this.appealMonitorSync.lastCheckTime < this.appealMonitorSync.checkDelay) {
+            if (!this.appealMonitorSync.pendingCheck) {
+                console.log('⏳ Batching appeal check request');
+                this.appealMonitorSync.pendingCheck = true;
+                
+                setTimeout(() => {
+                    this.appealMonitorSync.pendingCheck = false;
+                    this.appealMonitorSync.lastCheckTime = Date.now();
+                    this.checkForExistingAppeals();
+                }, this.appealMonitorSync.checkDelay);
+            }
+            return;
+        }
+        
+        this.appealMonitorSync.lastCheckTime = now;
+        this.checkForExistingAppeals();
+    }
 }
 
 // Initialize analyzer
 const analyzer = new OmniChatTrafficAnalyzer();
 
-// КОНТРОЛИРУЕМАЯ Интеграция с AppealMonitor (с защитой от спама)
+// Expose analyzer globally for improved synchronization
+window.omniAnalyzer = analyzer;
+
+// IMPROVED AppealMonitor Integration
 if (window.appealMonitor) {
-    console.log('🔗 AppealMonitor detected - controlled integration active');
-    console.log('✅ Auto-processing ENABLED with spam protection');
+    console.log('🔗 AppealMonitor detected - improved synchronization active');
+    
+    // Replace the old timeout-based approach with event-based
+    const originalOnNewAppeal = window.appealMonitor.onNewAppeal;
+    window.appealMonitor.onNewAppeal = function(appealInfo) {
+        console.log('📣 AppealMonitor → OmniAnalyzer: New appeal notification');
+        
+        // Call original method
+        if (originalOnNewAppeal) {
+            originalOnNewAppeal.call(this, appealInfo);
+        }
+        
+        // Request coordinated appeal check
+        if (window.omniAnalyzer && window.omniAnalyzer.autoResponseEnabled) {
+            window.omniAnalyzer.requestAppealCheck('AppealMonitor');
+        }
+    };
+    
+    console.log('✅ Auto-processing ENABLED with improved synchronization');
 } else {
     console.log('📝 AppealMonitor not found - using built-in detection only');
 }
@@ -2471,4 +2869,8 @@ setTimeout(() => {
         console.log('  appealMonitor.quickSendTemplate() - Send template to active appeal');
         console.log('  appealMonitor.start() / appealMonitor.stop() - Control monitoring');
     }
+
+    console.log('\n🧪 Test new features:');
+    console.log('  omniAnalyzer.testIdExtraction() - Test appeal ID extraction patterns');
+    console.log('  omniAnalyzer.testTimerDetection() - Test timer detection (60s countdown)');
 }, 3000); // Увеличиваем время для полной инициализации

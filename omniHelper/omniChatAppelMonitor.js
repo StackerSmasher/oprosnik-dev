@@ -177,18 +177,8 @@ class AppealMonitor {
                     if (appealInfo.status === 'new') {
                         this.onNewAppeal(appealInfo);
                         
-                        // Уведомляем OmniAnalyzer о наличии нового обращения
-                        // Но НЕ добавляем его напрямую в очередь
-                        if (window.omniAnalyzer) {
-                            console.log('📣 AppealMonitor: Notifying OmniAnalyzer about new appeal');
-                            // Можно тригернуть проверку через короткое время
-                            setTimeout(() => {
-                                if (window.omniAnalyzer && window.omniAnalyzer.autoResponseEnabled) {
-                                    console.log('🔍 Triggering OmniAnalyzer appeal check...');
-                                    window.omniAnalyzer.checkForExistingAppeals();
-                                }
-                            }, 1000);
-                        }
+                        // Note: OmniAnalyzer synchronization is now handled through 
+                        // method override in content.js for better coordination
                     }
                 } else {
                     // Обновляем информацию
@@ -214,100 +204,197 @@ class AppealMonitor {
             text: null,
             status: 'unknown',
             timestamp: Date.now(),
-            element: element
+            element: element,
+            timer: null
         };
-        
+
+        // ПРИОРИТЕТ 1: Поиск реального номера обращения в тексте
+        const allText = element.textContent || '';
+        const appealPatterns = [
+            /Обращение\s*№\s*(\d+)/i,        // "Обращение № 123456"
+            /Обращение[:\s#]+(\d+)/i,        // "Обращение: 123456" или "Обращение #123456"
+            /Appeal[:\s#№]+(\d+)/i,          // "Appeal: 123456" или "Appeal № 123456"
+            /#(\d{5,})/,                     // "#123456" (минимум 5 цифр)
+            /ID[:\s]+(\d+)/i,                // "ID: 123456"
+            /№\s*(\d{5,})/                   // "№ 123456" (минимум 5 цифр)
+        ];
+
+        for (const pattern of appealPatterns) {
+            const match = allText.match(pattern);
+            if (match) {
+                info.id = match[1];
+                console.log('✅ Found appeal ID in text:', info.id);
+                break;
+            }
+        }
+
+        // ПРИОРИТЕТ 2: Data-атрибуты
+        if (!info.id) {
+            info.id = element.dataset?.appealId ||
+                     element.dataset?.appealid ||
+                     element.getAttribute('data-appeal-id') ||
+                     element.getAttribute('data-dialog-id');
+        }
+
+        // ПРИОРИТЕТ 3: Поиск в дочерних элементах
+        if (!info.id) {
+            const childElements = element.querySelectorAll('*');
+            for (const child of childElements) {
+                const childText = child.textContent || '';
+                for (const pattern of appealPatterns) {
+                    const match = childText.match(pattern);
+                    if (match) {
+                        info.id = match[1];
+                        console.log('✅ Found appeal ID in child element:', info.id);
+                        break;
+                    }
+                }
+                if (info.id) break;
+            }
+        }
+
+        // Поиск таймера в специфической структуре HTML
+        const timerContainer = element.querySelector('.sc-cewOZc.ioQCCB span') ||
+                              element.querySelector('div[class*="sc-cewOZc"] span') ||
+                              element.querySelector('span:contains("сек")');
+
+        if (timerContainer) {
+            const timerText = timerContainer.textContent || '';
+            const timerMatch = timerText.match(/(\d+)\s*сек/i);
+            if (timerMatch) {
+                const seconds = parseInt(timerMatch[1]);
+                if (seconds < 60) {
+                    info.timer = seconds;
+                    console.log('⏰ AppealMonitor: Found timer in specific structure:', seconds, 'seconds');
+                }
+            }
+        }
+
+        // Резервный поиск таймера в общем тексте
+        if (!info.timer) {
+            const timerPatterns = [
+                /(\d+)\s*сек/i,                 // "45 сек", "30 сек"
+                /(\d{1,2})\s*с\b/i,             // "45с", "59 с" (но не "792с")
+                /(\d{1,2})\s*sec/i,             // "45sec"
+                /0:(\d{2})/,                    // "0:45"
+            ];
+
+            for (const pattern of timerPatterns) {
+                const match = allText.match(pattern);
+                if (match) {
+                    const seconds = parseInt(match[1]);
+                    if (seconds < 60) {
+                        info.timer = seconds;
+                        console.log('⏰ AppealMonitor: Found timer in text:', seconds, 'seconds');
+                        break;
+                    }
+                }
+            }
+        }
+
         // Для элементов с data-testid="appeal-preview"
         if (element.getAttribute('data-testid') === 'appeal-preview') {
-            // Извлекаем имя клиента
+            // Извлекаем имя клиента (только для логирования, не как ID)
             const nameElement = element.querySelector('.sc-hSWyVn.jLoqEI, [title]');
             if (nameElement) {
                 info.name = nameElement.textContent?.trim() || nameElement.getAttribute('title');
-                // Используем имя как ID, если нет другого ID
-                info.id = info.name?.replace(/\s+/g, '_') || `appeal_${Date.now()}`;
             }
-            
+
             // Извлекаем последнее сообщение
             const messageElement = element.querySelector('.sc-mYtaj.hfzSXm');
             if (messageElement) {
                 info.text = messageElement.textContent?.trim();
             }
-            
-            // Проверяем наличие бейджа (новое сообщение)
+
+            // Проверяем наличие бейджа (новое сообщение) ИЛИ таймера
             const badge = element.querySelector('[data-testid="badge"], [data-testid="dot"]');
-            if (badge) {
+            if (badge || info.timer) {
                 info.status = 'new';
+                if (info.timer) {
+                    console.log('🔥 Appeal has timer - marking as new:', info.timer, 'seconds');
+                }
             } else {
                 info.status = 'read';
             }
         } else {
-            // Старая логика для других элементов
-            // 1. Из data-атрибутов
-            info.id = element.dataset?.appealId || 
-                     element.dataset?.appealid || 
-                     element.getAttribute('data-appeal-id') ||
-                     element.getAttribute('data-dialog-id');
-            
-            // 2. Из текста элемента
-            if (!info.id) {
-                const text = element.textContent || '';
-                
-                // Паттерны для поиска ID
-                const patterns = [
-                    /#(\d{5,})/,           // #12345678
-                    /Appeal[:\s]+(\d+)/i,  // Appeal: 12345678
-                    /ID[:\s]+(\d+)/i,      // ID: 12345678
-                    /№(\d{5,})/,           // №12345678
-                    /Обращение[:\s]+(\d+)/i // Обращение: 12345678
-                ];
-                
-                for (const pattern of patterns) {
-                    const match = text.match(pattern);
-                    if (match) {
-                        info.id = match[1];
-                        break;
-                    }
-                }
-            }
-            
-            // 3. Из ID элемента
-            if (!info.id && element.id) {
-                const idMatch = element.id.match(/\d{5,}/);
-                if (idMatch) {
-                    info.id = idMatch[0];
-                }
-            }
-            
             // Извлекаем текст сообщения
             info.text = element.textContent?.trim().substring(0, 100);
-            
-            // Определяем статус (новый/прочитанный)
-            const isNew = this.isNewAppeal(element);
+
+            // Определяем статус (новый/прочитанный) - включая проверку таймера
+            const isNew = this.isNewAppeal(element) || info.timer;
             info.status = isNew ? 'new' : 'read';
         }
-        
-        // Если ID не найден, создаем на основе текста или времени
+
+        // ПОСЛЕДНИЙ РЕСУРС: Если ID всё ещё не найден
         if (!info.id) {
-            info.id = info.text?.substring(0, 20).replace(/\W+/g, '_') || `appeal_${Date.now()}`;
+            // Ищем любое число минимум 5 цифр
+            const numericMatch = allText.match(/\b(\d{5,})\b/);
+            if (numericMatch) {
+                info.id = numericMatch[1];
+                console.log('⚠️ Using numeric ID as fallback:', info.id);
+            } else {
+                // Только если совсем ничего не найдено, используем имя как основу
+                info.id = info.name?.replace(/\s+/g, '_') || `appeal_${Date.now()}`;
+                console.log('⚠️ No ID found, using name-based ID:', info.id);
+            }
         }
-        
+
         return info;
     }
     
     // Проверка, является ли обращение новым или активным
     isNewAppeal(element) {
         // Проверяем различные индикаторы нового сообщения
-        
-        // 1. Классы
+
+        // 1. Проверка таймера (приоритет!) - если есть таймер МЕНЬШЕ 60 секунд
+
+        // Сначала ищем специфическую структуру таймера
+        const timerContainer = element.querySelector('.sc-cewOZc.ioQCCB span') ||
+                              element.querySelector('div[class*="sc-cewOZc"] span') ||
+                              element.querySelector('span:contains("сек")');
+
+        if (timerContainer) {
+            const timerText = timerContainer.textContent || '';
+            const timerMatch = timerText.match(/(\d+)\s*сек/i);
+            if (timerMatch) {
+                const seconds = parseInt(timerMatch[1]);
+                if (seconds < 60) {
+                    console.log('🔥 AppealMonitor: Found timer in specific structure - marking as new:', seconds, 'seconds');
+                    return true;
+                }
+            }
+        }
+
+        // Резервный поиск таймера в общем тексте
+        const text = element.textContent || '';
+        const timerPatterns = [
+            /(\d+)\s*сек/i,                 // "45 сек", "30 сек"
+            /(\d{1,2})\s*с\b/i,             // "45с", "59 с" (но не "792с")
+            /(\d{1,2})\s*sec/i,             // "45sec"
+            /0:(\d{2})/,                    // "0:45"
+        ];
+
+        for (const pattern of timerPatterns) {
+            const match = text.match(pattern);
+            if (match) {
+                const seconds = parseInt(match[1]);
+                if (seconds < 60) {
+                    console.log('🔥 AppealMonitor: Found timer in text - marking as new:', seconds, 'seconds');
+                    return true;
+                }
+            }
+        }
+
+        // 2. Классы
         const classList = element.className || '';
-        if (classList.includes('unread') || 
-            classList.includes('new') || 
+        if (classList.includes('unread') ||
+            classList.includes('new') ||
             classList.includes('pending') ||
             classList.includes('active')) {
             return true;
         }
-        
-        // 2. Индикаторы непрочитанного
+
+        // 3. Индикаторы непрочитанного
         const unreadIndicators = [
             '.badge',
             '.notification',
@@ -316,26 +403,26 @@ class AppealMonitor {
             '[data-status="new"]',
             '.new-message'
         ];
-        
+
         for (const selector of unreadIndicators) {
             if (element.querySelector(selector)) {
                 return true;
             }
         }
-        
-        // 3. Стиль текста (жирный часто означает непрочитанное)
+
+        // 4. Стиль текста (жирный часто означает непрочитанное)
         const fontWeight = window.getComputedStyle(element).fontWeight;
         if (fontWeight === 'bold' || parseInt(fontWeight) >= 600) {
             return true;
         }
-        
-        // 4. Фоновый цвет (новые часто выделены)
+
+        // 5. Фоновый цвет (новые часто выделены)
         const bgColor = window.getComputedStyle(element).backgroundColor;
         if (bgColor && bgColor !== 'rgba(0, 0, 0, 0)' && bgColor !== 'transparent') {
             // Есть фоновый цвет - возможно, выделение
             return true;
         }
-        
+
         return false;
     }
 
