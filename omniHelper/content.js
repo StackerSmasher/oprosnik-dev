@@ -1,6 +1,288 @@
 // ===== ENHANCED TRAFFIC ANALYZER FOR OMNICHAT =====
 // Version 4.0 - Template-based auto-response system
 
+// ===== УЛУЧШЕННЫЙ МЕХАНИЗМ ИДЕНТИФИКАЦИИ ОБРАЩЕНИЙ =====
+
+class AppealIdentificationSystem {
+    constructor() {
+        // Карта для хранения fingerprint -> appealId
+        this.fingerprintMap = new Map();
+        // Карта обработанных DOM элементов
+        this.processedElements = new WeakSet();
+        // Счетчик для генерации временных ID
+        this.tempIdCounter = 0;
+    }
+
+    /**
+     * Создает уникальный fingerprint для обращения
+     * Использует комбинацию: позиция в DOM + текст + время обнаружения
+     */
+    createAppealFingerprint(element) {
+        const components = [];
+
+        // 1. Позиция элемента в родительском контейнере
+        const parent = element.parentElement;
+        if (parent) {
+            const siblings = Array.from(parent.children);
+            const position = siblings.indexOf(element);
+            components.push(`pos:${position}`);
+        }
+
+        // 2. Имя клиента (если есть)
+        const nameElement = element.querySelector('.sc-hSWyVn.jLoqEI, [title]');
+        const clientName = nameElement?.textContent?.trim() ||
+                          nameElement?.getAttribute('title') ||
+                          'unknown';
+        components.push(`name:${clientName}`);
+
+        // 3. Первые 50 символов последнего сообщения
+        const messageElement = element.querySelector('.sc-mYtaj.hfzSXm, [data-testid="collapsable-text"]');
+        const messageText = messageElement?.textContent?.trim().substring(0, 50) || '';
+        components.push(`msg:${messageText}`);
+
+        // 4. Наличие таймера и его значение
+        const timerElement = element.querySelector('.sc-cewOZc.ioQCCB span, [class*="timer"]');
+        if (timerElement) {
+            const timerText = timerElement.textContent || '';
+            const timerMatch = timerText.match(/(\d+)\s*сек/i);
+            if (timerMatch) {
+                components.push(`timer:${timerMatch[1]}`);
+            }
+        }
+
+        // 5. Временное окно (округляем до 30 секунд для группировки)
+        const timeWindow = Math.floor(Date.now() / 30000);
+        components.push(`time:${timeWindow}`);
+
+        // Создаем хеш из компонентов
+        const fingerprint = this.hashString(components.join('|'));
+
+        console.log('🔑 Fingerprint created:', {
+            fingerprint: fingerprint,
+            components: components
+        });
+
+        return fingerprint;
+    }
+
+    /**
+     * Простая хеш-функция для создания короткого ID
+     */
+    hashString(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32bit integer
+        }
+        return Math.abs(hash).toString(36);
+    }
+
+    /**
+     * Извлекает или генерирует уникальный ID для обращения
+     */
+    extractOrGenerateAppealId(element) {
+        // Шаг 1: Проверяем, не обработан ли уже этот элемент
+        if (this.processedElements.has(element)) {
+            console.log('⏭️ Element already processed (WeakSet check)');
+            return null;
+        }
+
+        // Шаг 2: Проверяем data-атрибут маркера обработки
+        if (element.dataset.omniProcessed === 'true') {
+            console.log('⏭️ Element already processed (data attribute check)');
+            return null;
+        }
+
+        // Шаг 3: Пытаемся найти реальный номер обращения
+        const realAppealId = this.findRealAppealId(element);
+
+        if (realAppealId) {
+            console.log('✅ Found real appeal ID:', realAppealId);
+            return realAppealId;
+        }
+
+        // Шаг 4: Создаем fingerprint для элемента
+        const fingerprint = this.createAppealFingerprint(element);
+
+        // Шаг 5: Проверяем, есть ли уже ID для этого fingerprint
+        if (this.fingerprintMap.has(fingerprint)) {
+            const existingId = this.fingerprintMap.get(fingerprint);
+            console.log('📋 Using existing ID for fingerprint:', existingId);
+            return existingId;
+        }
+
+        // Шаг 6: Генерируем новый временный ID
+        const tempId = `TEMP_${Date.now()}_${++this.tempIdCounter}_${fingerprint}`;
+        this.fingerprintMap.set(fingerprint, tempId);
+
+        console.log('🆕 Generated temporary ID:', tempId);
+        return tempId;
+    }
+
+    /**
+     * Ищет реальный номер обращения в элементе
+     */
+    findRealAppealId(element) {
+        const text = element.textContent || '';
+
+        // Паттерны для поиска реальных номеров обращений
+        const patterns = [
+            /Обращение\s*№\s*(\d{5,})/i,     // "Обращение № 123456" (минимум 5 цифр)
+            /Обращение[:\s#]+(\d{5,})/i,     // "Обращение: 123456"
+            /Appeal[:\s#№]+(\d{5,})/i,       // "Appeal: 123456"
+            /#(\d{6,})/,                      // "#123456" (минимум 6 цифр для уверенности)
+            /ID[:\s]+(\d{5,})/i,              // "ID: 123456"
+            /№\s*(\d{6,})/                   // "№ 123456" (минимум 6 цифр)
+        ];
+
+        for (const pattern of patterns) {
+            const match = text.match(pattern);
+            if (match) {
+                return match[1];
+            }
+        }
+
+        // Проверяем data-атрибуты
+        const dataAppealId = element.dataset?.appealId ||
+                           element.dataset?.appealid ||
+                           element.getAttribute('data-appeal-id');
+
+        // Возвращаем только если это похоже на реальный ID (числовой и достаточно длинный)
+        if (dataAppealId && /^\d{5,}$/.test(dataAppealId)) {
+            return dataAppealId;
+        }
+
+        return null;
+    }
+
+    /**
+     * Помечает элемент как обработанный
+     */
+    markAsProcessed(element, appealId) {
+        // Добавляем в WeakSet
+        this.processedElements.add(element);
+
+        // Добавляем data-атрибут для персистентности
+        element.dataset.omniProcessed = 'true';
+        element.dataset.omniProcessedId = appealId;
+        element.dataset.omniProcessedTime = Date.now();
+
+        // Визуальная индикация (можно убрать в продакшене)
+        element.style.opacity = '0.7';
+
+        console.log('✅ Element marked as processed:', appealId);
+    }
+
+    /**
+     * Проверяет, является ли обращение новым (не обработанным)
+     */
+    isNewUnprocessedAppeal(element) {
+        // 1. Проверяем маркеры обработки
+        if (this.processedElements.has(element) ||
+            element.dataset.omniProcessed === 'true') {
+            return false;
+        }
+
+        // 2. Проверяем таймер (< 60 секунд = новое)
+        const timerCheck = this.checkTimer(element);
+        if (timerCheck.hasTimer && timerCheck.seconds < 60) {
+            console.log('🔥 New appeal detected by timer:', timerCheck.seconds, 'seconds');
+            return true;
+        }
+
+        // 3. Проверяем другие индикаторы новизны
+        const hasNewIndicators = this.checkNewIndicators(element);
+
+        return hasNewIndicators;
+    }
+
+    /**
+     * Проверяет наличие таймера в элементе
+     */
+    checkTimer(element) {
+        const result = { hasTimer: false, seconds: null };
+
+        // Ищем таймер в специфической структуре
+        const timerContainer = element.querySelector('.sc-cewOZc.ioQCCB span, [class*="timer"]');
+
+        if (timerContainer) {
+            const timerText = timerContainer.textContent || '';
+            const timerMatch = timerText.match(/(\d+)\s*сек/i);
+            if (timerMatch) {
+                result.hasTimer = true;
+                result.seconds = parseInt(timerMatch[1]);
+            }
+        }
+
+        // Резервный поиск в тексте
+        if (!result.hasTimer) {
+            const text = element.textContent || '';
+            const timerMatch = text.match(/(\d+)\s*сек/i);
+            if (timerMatch) {
+                const seconds = parseInt(timerMatch[1]);
+                // Проверяем, что это реально таймер (не больше 1000 секунд)
+                if (seconds <= 1000) {
+                    result.hasTimer = true;
+                    result.seconds = seconds;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Проверяет другие индикаторы нового обращения
+     */
+    checkNewIndicators(element) {
+        // Проверяем наличие badge/dot
+        const hasBadge = !!element.querySelector('[data-testid="badge"], [data-testid="dot"], .badge, .new');
+
+        // Проверяем классы
+        const classList = element.className || '';
+        const hasNewClass = classList.includes('unread') ||
+                           classList.includes('new') ||
+                           classList.includes('pending');
+
+        // Проверяем стиль (жирный текст)
+        const fontWeight = window.getComputedStyle(element).fontWeight;
+        const isBold = fontWeight === 'bold' || parseInt(fontWeight) >= 600;
+
+        return hasBadge || hasNewClass || isBold;
+    }
+
+    /**
+     * Очищает старые fingerprints (старше 1 часа)
+     */
+    cleanupOldFingerprints() {
+        const oneHourAgo = Date.now() - 60 * 60 * 1000;
+
+        // Очищаем data-атрибуты у старых элементов
+        document.querySelectorAll('[data-omni-processed="true"]').forEach(element => {
+            const processedTime = parseInt(element.dataset.omniProcessedTime || '0');
+            if (processedTime < oneHourAgo) {
+                delete element.dataset.omniProcessed;
+                delete element.dataset.omniProcessedId;
+                delete element.dataset.omniProcessedTime;
+                element.style.opacity = '';
+            }
+        });
+
+        // Очищаем fingerprint map (ограничиваем размер)
+        if (this.fingerprintMap.size > 100) {
+            const entriesToKeep = 50;
+            const entries = Array.from(this.fingerprintMap.entries());
+            this.fingerprintMap.clear();
+            entries.slice(-entriesToKeep).forEach(([key, value]) => {
+                this.fingerprintMap.set(key, value);
+            });
+        }
+
+        console.log('🧹 Cleanup completed');
+    }
+}
+
 class OmniChatTrafficAnalyzer {
     constructor() {
         this.dialogIds = new Map();
@@ -39,7 +321,15 @@ class OmniChatTrafficAnalyzer {
             pendingCheck: false,
             checkDelay: 2000 // 2 seconds delay for batching
         };
-        
+
+        // Initialize the new appeal identification system
+        this.appealIdSystem = new AppealIdentificationSystem();
+
+        // Start periodic cleanup
+        setInterval(() => {
+            this.appealIdSystem.cleanupOldFingerprints();
+        }, 30 * 60 * 1000); // Every 30 minutes
+
         this.init();
     }
 
@@ -115,7 +405,9 @@ class OmniChatTrafficAnalyzer {
     }
 
     checkForNewAppeal(element) {
-        // Проверяем различные индикаторы нового обращения
+        // Enhanced appeal detection using the new identification system
+
+        // Step 1: Find appeal elements using various selectors
         const appealIndicators = [
             '[data-appeal-id]',
             '[data-appealid]',
@@ -130,7 +422,7 @@ class OmniChatTrafficAnalyzer {
         ];
 
         let appealElement = null;
-        
+
         for (const selector of appealIndicators) {
             appealElement = element.matches?.(selector) ? element : element.querySelector?.(selector);
             if (appealElement) break;
@@ -138,49 +430,53 @@ class OmniChatTrafficAnalyzer {
 
         if (!appealElement) return;
 
-        // Извлекаем appeal ID
-        const appealId = this.extractAppealIdFromElement(appealElement);
-        
-        if (!appealId) return;
-        
-        // Критическая проверка перед обработкой
+        // Step 2: Use the new appeal identification system
+        const appealId = this.appealIdSystem.extractOrGenerateAppealId(appealElement);
+
+        if (!appealId) {
+            console.log('⏭️ Element already processed or invalid');
+            return;
+        }
+
+        // Step 3: Check if this is a new unprocessed appeal
+        if (!this.appealIdSystem.isNewUnprocessedAppeal(appealElement)) {
+            console.log('⏭️ Appeal not new or already processed:', appealId);
+            return;
+        }
+
+        // Step 4: Check existing system deduplication
         if (this.processedAppeals.has(appealId)) {
-            console.log('🙅 Appeal already processed (early check):', appealId);
+            console.log('⏭️ Appeal already in processed set:', appealId);
             return;
         }
-        
-        // Проверяем, нет ли в очереди
+
+        // Step 5: Check if already in queue
         if (this.appealQueue.some(item => item.appealId === appealId)) {
-            console.log('🙅 Appeal already in queue (early check):', appealId);
+            console.log('⏭️ Appeal already in queue:', appealId);
             return;
         }
-        
-        if (this.isAppealEligibleForProcessing(appealId)) {
-            console.log('🆕 New appeal detected:', appealId);
-            
-            // Проверяем, что это новое/непрочитанное обращение
-            const isNew = this.isNewAppeal(appealElement);
-            
-            if (isNew && this.autoResponseEnabled) {
-                console.log('➕ Attempting to add new appeal to queue:', appealId);
-                
-                const success = this.addAppealToQueue({
-                    appealId: appealId,
-                    element: appealElement,
-                    timestamp: Date.now(),
-                    source: 'DOM_observer'
-                });
-                
-                if (success) {
-                    console.log('✅ Successfully added appeal to queue:', appealId);
-                } else {
-                    console.log('❌ Failed to add appeal to queue (duplicate?):', appealId);
-                }
-            } else if (!isNew) {
-                console.log('🔍 Appeal element found but not marked as new/unread:', appealId);
-            } else if (!this.autoResponseEnabled) {
-                console.log('🚫 Auto-response disabled, skipping:', appealId);
+
+        console.log('🆕 New unprocessed appeal detected:', appealId);
+
+        // Step 6: Mark element as processed immediately
+        this.appealIdSystem.markAsProcessed(appealElement, appealId);
+
+        // Step 7: Add to queue if auto-response is enabled
+        if (this.autoResponseEnabled) {
+            const success = this.addAppealToQueue({
+                appealId: appealId,
+                element: appealElement,
+                timestamp: Date.now(),
+                source: 'DOM_observer'
+            });
+
+            if (success) {
+                console.log('✅ Successfully added to queue:', appealId);
+            } else {
+                console.log('❌ Failed to add to queue:', appealId);
             }
+        } else {
+            console.log('🚫 Auto-response disabled, skipping:', appealId);
         }
     }
 
@@ -2721,6 +3017,115 @@ class OmniChatTrafficAnalyzer {
                     results: results,
                     summary: `${successful}/${total} tests passed`,
                     success: successful === total
+                };
+            },
+
+            // Test the new AppealIdentificationSystem
+            testNewIdentificationSystem: () => {
+                console.log('🧪 Testing new AppealIdentificationSystem...');
+
+                // Create test elements with different characteristics
+                const testCases = [
+                    {
+                        name: 'Real appeal with ID',
+                        html: '<div class="appeal-item" data-appeal-id="123456"><span>Иванов И.И.</span><div>Обращение № 123456</div></div>',
+                        expectRealId: true
+                    },
+                    {
+                        name: 'Appeal with timer (new)',
+                        html: '<div class="chat-item"><span>Петров П.П.</span><div class="sc-cewOZc ioQCCB"><span>45 сек</span></div></div>',
+                        expectNew: true
+                    },
+                    {
+                        name: 'Appeal with old timer (not new)',
+                        html: '<div class="dialog-item"><span>Сидоров С.С.</span><div class="sc-cewOZc ioQCCB"><span>792 сек</span></div></div>',
+                        expectNew: false
+                    },
+                    {
+                        name: 'Already processed appeal',
+                        html: '<div class="appeal-item" data-omni-processed="true" data-omni-processed-id="TEMP_123"><span>Обработанный</span></div>',
+                        expectNull: true
+                    }
+                ];
+
+                const results = [];
+
+                testCases.forEach((testCase, index) => {
+                    console.log(`\n--- Test ${index + 1}: ${testCase.name} ---`);
+
+                    // Create DOM element
+                    const element = document.createElement('div');
+                    element.innerHTML = testCase.html;
+                    const testElement = element.firstElementChild;
+                    document.body.appendChild(testElement); // Add to DOM for proper testing
+
+                    try {
+                        // Test ID extraction
+                        const appealId = this.appealIdSystem.extractOrGenerateAppealId(testElement);
+                        console.log('📝 Generated ID:', appealId);
+
+                        // Test new appeal detection
+                        const isNew = appealId ? this.appealIdSystem.isNewUnprocessedAppeal(testElement) : false;
+                        console.log('🆕 Is new appeal:', isNew);
+
+                        // Test timer detection
+                        const timerCheck = this.appealIdSystem.checkTimer(testElement);
+                        console.log('⏱️ Timer check:', timerCheck);
+
+                        // Evaluate results
+                        const success =
+                            (testCase.expectRealId && appealId && /^\d+$/.test(appealId)) ||
+                            (testCase.expectNew && isNew) ||
+                            (!testCase.expectNew && !isNew) ||
+                            (testCase.expectNull && !appealId);
+
+                        results.push({
+                            name: testCase.name,
+                            appealId: appealId,
+                            isNew: isNew,
+                            timerCheck: timerCheck,
+                            success: success
+                        });
+
+                        console.log(`${success ? '✅' : '❌'} Test result: ${success ? 'PASSED' : 'FAILED'}`);
+
+                    } catch (error) {
+                        console.error('❌ Test error:', error);
+                        results.push({
+                            name: testCase.name,
+                            error: error.message,
+                            success: false
+                        });
+                    } finally {
+                        // Cleanup
+                        document.body.removeChild(testElement);
+                    }
+                });
+
+                const successful = results.filter(r => r.success).length;
+                const total = results.length;
+
+                console.log(`\n📊 AppealIdentificationSystem Test Results: ${successful}/${total} tests passed`);
+
+                // Test fingerprint system
+                console.log('\n🔑 Testing fingerprint generation...');
+                const tempElement = document.createElement('div');
+                tempElement.className = 'appeal-item';
+                tempElement.innerHTML = '<span>Test Client</span><span>Test message content</span>';
+                document.body.appendChild(tempElement);
+
+                const fingerprint1 = this.appealIdSystem.createAppealFingerprint(tempElement);
+                const fingerprint2 = this.appealIdSystem.createAppealFingerprint(tempElement);
+
+                console.log('🔑 Same element generates same fingerprint:', fingerprint1 === fingerprint2 ? '✅' : '❌');
+
+                document.body.removeChild(tempElement);
+
+                return {
+                    results: results,
+                    summary: `${successful}/${total} tests passed`,
+                    success: successful === total,
+                    fingerprintTest: fingerprint1 === fingerprint2
                 };
             }
         };
