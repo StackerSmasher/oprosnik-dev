@@ -342,6 +342,38 @@ class OmniChatTrafficAnalyzer {
         // Отслеживание приветствий в сессии
         this.greetedAppeals = new Map(); // appealId -> timestamp
 
+        // Инициализация GreetingTracker
+        this.greetingTracker = window.greetingTracker || new GreetingTracker();
+
+        // Добавляем блокировку на уровне браузера через localStorage
+        this.greetingLock = {
+            acquire: async (appealId) => {
+                const lockKey = `greeting_lock_${appealId}`;
+                const lockValue = Date.now();
+
+                // Пытаемся установить блокировку
+                localStorage.setItem(lockKey, lockValue);
+
+                // Проверяем через 50ms, что блокировка наша
+                await this.wait(50);
+                const currentLock = localStorage.getItem(lockKey);
+
+                if (currentLock == lockValue) {
+                    console.log('🔒 Lock acquired for:', appealId);
+                    return true;
+                }
+
+                console.log('🔒 Lock denied for:', appealId);
+                return false;
+            },
+
+            release: (appealId) => {
+                const lockKey = `greeting_lock_${appealId}`;
+                localStorage.removeItem(lockKey);
+                console.log('🔓 Lock released for:', appealId);
+            }
+        };
+
         // Загружаем из storage при старте
         chrome.storage.local.get(['greetedAppeals'], (result) => {
             if (result.greetedAppeals) {
@@ -525,6 +557,13 @@ class OmniChatTrafficAnalyzer {
         // Step 4: Check existing system deduplication (основная защита от дублирования)
         if (this.processedAppeals.has(appealId)) {
             console.log('⏭️ Appeal already in processed set:', appealId);
+            return;
+        }
+
+        // НОВАЯ ПРОВЕРКА: GreetingTracker
+        if (this.greetingTracker && this.greetingTracker.wasGreeted(element, appealId)) {
+            console.log('⏭️ Appeal already greeted (GreetingTracker):', appealId);
+            this.appealIdSystem.markAsProcessed(appealElement, appealId);
             return;
         }
 
@@ -1045,11 +1084,21 @@ class OmniChatTrafficAnalyzer {
             }
             
             console.log('✅ Successfully processed appeal:', appeal.appealId);
+
+            // КРИТИЧНО: Отмечаем в GreetingTracker
+            if (this.greetingTracker && appeal.element) {
+                await this.greetingTracker.markAsGreeted(
+                    appeal.element,
+                    appeal.appealId,
+                    this.templateConfig.templateText
+                );
+            }
+
             this.sessionProcessedCount++;
             
         } catch (error) {
             console.error('❌ Error processing appeal:', error.message);
-            
+
             // КРИТИЧНО: НЕ ПОВТОРЯЕМ ПРИ ОШИБКАХ
             // Маркируем как обработанное чтобы избежать спама (нормализованный ID)
             console.log('❌ Appeal processing failed, marking as processed to prevent spam');
@@ -1057,6 +1106,9 @@ class OmniChatTrafficAnalyzer {
             this.processedAppeals.add(normalizedErrorId);
             this.processedTimestamps.set(normalizedErrorId, Date.now());
             await this.saveProcessedAppealImmediately(normalizedErrorId);
+        } finally {
+            // Всегда освобождаем блокировку
+            this.greetingLock.release(appeal.appealId);
         }
         
         // Очищаем текущее обрабатываемое обращение
@@ -1078,8 +1130,31 @@ class OmniChatTrafficAnalyzer {
         timestamp: startTime,
         action: 'process'
     };
-    
+
+    // КРИТИЧНО: Проверка через GreetingTracker
+    if (this.greetingTracker && appeal.element) {
+        if (this.greetingTracker.wasGreeted(appeal.element, appeal.appealId)) {
+            console.log('🚫 Appeal already greeted (GreetingTracker check):', appeal.appealId);
+            return;
+        }
+    }
+
+    // Пытаемся получить блокировку
+    const lockAcquired = await this.greetingLock.acquire(appeal.appealId);
+    if (!lockAcquired) {
+        console.log('🚫 Could not acquire lock, another process is handling:', appeal.appealId);
+        return;
+    }
+
     try {
+        // Двойная проверка после получения блокировки
+        if (this.greetingTracker && appeal.element) {
+            if (this.greetingTracker.wasGreeted(appeal.element, appeal.appealId)) {
+                console.log('🚫 Appeal greeted while waiting for lock:', appeal.appealId);
+                return;
+            }
+        }
+
         // ВАЖНО: Сначала проверяем, не было ли обращение уже обработано
         // (на случай если оно каким-то образом попало в очередь повторно)
         if (this.processedAppeals.has(appeal.appealId)) {
