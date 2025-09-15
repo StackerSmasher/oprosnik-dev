@@ -184,14 +184,28 @@ class AppealIdentificationSystem {
             return false;
         }
 
-        // 2. Проверяем таймер (< 60 секунд = новое)
-        const timerCheck = this.checkTimer(element);
-        if (timerCheck.hasTimer && timerCheck.seconds < 60) {
-            console.log('🔥 New appeal detected by timer:', timerCheck.seconds, 'seconds');
-            return true;
+        // 2. НОВОЕ: Проверяем, не активное ли это обращение
+        const appealId = this.extractOrGenerateAppealId(element);
+        if (appealId && window.omniAnalyzer?.isCurrentlyActiveAppeal?.(appealId)) {
+            console.log('🚫 Appeal is currently active, not new:', appealId);
+            return false;
         }
 
-        // 3. Проверяем другие индикаторы новизны
+        // 3. Проверяем таймер с более строгими условиями
+        const timerCheck = this.checkTimer(element);
+
+        // ИЗМЕНЕНО: Проверяем не только наличие таймера, но и другие признаки
+        if (timerCheck.hasTimer && timerCheck.seconds < 30) { // Уменьшили порог до 30 секунд
+            // Дополнительная проверка - есть ли badge
+            const hasBadge = !!element.querySelector('[data-testid="badge"], [data-testid="dot"], .new');
+
+            if (hasBadge) {
+                console.log('🔥 New appeal with timer AND badge:', timerCheck.seconds, 'seconds');
+                return true;
+            }
+        }
+
+        // 4. Проверяем другие индикаторы новизны
         const hasNewIndicators = this.checkNewIndicators(element);
 
         return hasNewIndicators;
@@ -325,6 +339,18 @@ class OmniChatTrafficAnalyzer {
         // Initialize the new appeal identification system
         this.appealIdSystem = new AppealIdentificationSystem();
 
+        // Отслеживание приветствий в сессии
+        this.greetedAppeals = new Map(); // appealId -> timestamp
+
+        // Загружаем из storage при старте
+        chrome.storage.local.get(['greetedAppeals'], (result) => {
+            if (result.greetedAppeals) {
+                Object.entries(result.greetedAppeals).forEach(([id, timestamp]) => {
+                    this.greetedAppeals.set(id, timestamp);
+                });
+            }
+        });
+
         // Start periodic cleanup
         setInterval(() => {
             this.appealIdSystem.cleanupOldFingerprints();
@@ -344,6 +370,7 @@ class OmniChatTrafficAnalyzer {
         this.setupAppealDetection();
         this.startPeriodicSync();
         this.startPeriodicAppealCheck(); // Новая периодическая проверка
+        this.startPeriodicCleanup(); // Периодическая очистка старых данных
         this.exposeDebugInterface();
     }
 
@@ -404,6 +431,50 @@ class OmniChatTrafficAnalyzer {
         }
     }
 
+    isCurrentlyActiveAppeal(appealId) {
+        // Проверяем, не находимся ли мы уже в этом обращении
+
+        // Метод 1: Проверка по URL
+        const currentUrl = window.location.href;
+        if (currentUrl.includes(appealId)) {
+            console.log('⚠️ Appeal is currently active (URL check):', appealId);
+            return true;
+        }
+
+        // Метод 2: Проверка активного элемента в боковой панели
+        const activeElements = document.querySelectorAll('.active, .selected, [aria-selected="true"]');
+        for (const element of activeElements) {
+            const elementText = element.textContent || '';
+            if (elementText.includes(appealId)) {
+                console.log('⚠️ Appeal is currently active (DOM check):', appealId);
+                return true;
+            }
+        }
+
+        // Метод 3: Проверка заголовка чата
+        const chatHeader = document.querySelector('.chat-header, .conversation-header, [data-testid="chat-header"]');
+        if (chatHeader) {
+            const headerText = chatHeader.textContent || '';
+            if (headerText.includes(appealId)) {
+                console.log('⚠️ Appeal is currently active (header check):', appealId);
+                return true;
+            }
+        }
+
+        // Метод 4: Проверка, есть ли уже текст в поле ввода
+        const messageInput = document.querySelector('textarea') ||
+                            document.querySelector('[contenteditable="true"]');
+        if (messageInput) {
+            const currentText = messageInput.value || messageInput.textContent || '';
+            if (currentText.includes('Запрос принят в работу')) {
+                console.log('⚠️ Template already in input field');
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     checkForNewAppeal(element) {
         // Enhanced appeal detection using the new identification system
 
@@ -438,15 +509,29 @@ class OmniChatTrafficAnalyzer {
             return;
         }
 
+        // НОВАЯ ПРОВЕРКА: Не является ли это текущим активным обращением
+        if (this.isCurrentlyActiveAppeal(appealId)) {
+            console.log('⏭️ Appeal is currently active, skipping:', appealId);
+            this.appealIdSystem.markAsProcessed(appealElement, appealId);
+            return;
+        }
+
         // Step 3: Check if this is a new unprocessed appeal
         if (!this.appealIdSystem.isNewUnprocessedAppeal(appealElement)) {
             console.log('⏭️ Appeal not new or already processed:', appealId);
             return;
         }
 
-        // Step 4: Check existing system deduplication
+        // Step 4: Check existing system deduplication (основная защита от дублирования)
         if (this.processedAppeals.has(appealId)) {
             console.log('⏭️ Appeal already in processed set:', appealId);
+            return;
+        }
+
+        // Step 4.5: Дополнительная проверка на кулдаун только для недавно обработанных
+        const processedTime = this.processedTimestamps.get(appealId);
+        if (processedTime && Date.now() - processedTime < 60000) { // 60 секунд
+            console.log('⏭️ Appeal in cooldown period:', appealId);
             return;
         }
 
@@ -457,23 +542,32 @@ class OmniChatTrafficAnalyzer {
         }
 
         console.log('🆕 New unprocessed appeal detected:', appealId);
+        console.log('  📝 Appeal details:');
+        console.log('    - Element classes:', appealElement.className);
+        console.log('    - Element text preview:', (appealElement.textContent || '').substring(0, 100));
+        console.log('    - Has timer:', !!appealElement.querySelector('[class*="timer"]') || /\d+\s*сек/i.test(appealElement.textContent || ''));
+        console.log('    - Auto-response enabled:', this.autoResponseEnabled);
 
         // Step 6: Mark element as processed immediately
         this.appealIdSystem.markAsProcessed(appealElement, appealId);
 
         // Step 7: Add to queue if auto-response is enabled
         if (this.autoResponseEnabled) {
+            console.log('📤 Adding appeal to queue for greeting processing:', appealId);
             const success = this.addAppealToQueue({
                 appealId: appealId,
                 element: appealElement,
                 timestamp: Date.now(),
-                source: 'DOM_observer'
+                source: 'DOM_observer',
+                type: 'greeting' // Маркируем как приветствие
             });
 
             if (success) {
-                console.log('✅ Successfully added to queue:', appealId);
+                console.log('✅ Successfully added greeting to queue:', appealId);
+                console.log('  📊 Current queue length:', this.appealQueue.length);
             } else {
-                console.log('❌ Failed to add to queue:', appealId);
+                console.log('❌ Failed to add greeting to queue:', appealId);
+                console.log('  ⚠️ This may prevent greeting from being sent');
             }
         } else {
             console.log('🚫 Auto-response disabled, skipping:', appealId);
@@ -537,11 +631,8 @@ class OmniChatTrafficAnalyzer {
             }
         }
 
-        // Method 6: Последний ресурс - только если найден числовой ID
-        const numericMatch = text.match(/\b(\d{5,})\b/);
-        if (numericMatch) {
-            return numericMatch[1];
-        }
+        // Method 6: Последний ресурс - только явные ID обращений
+        // Убираем слишком общий поиск цифр, который может цеплять номера телефонов и прочее
 
         return null;
     }
@@ -662,8 +753,16 @@ class OmniChatTrafficAnalyzer {
             '[data-appeal-id]',
             '.appeal-item',
             '.chat-item:not(.read)',
+            '.chat-item', // Добавляем все чаты, не только непрочитанные
             '.dialog-item.unread',
-            '.conversation-item.new'
+            '.dialog-item', // Добавляем все диалоги
+            '.conversation-item.new',
+            '.conversation-item', // Добавляем все разговоры
+            // Дополнительные селекторы для общих чатов
+            '[class*="chat"]',
+            '[class*="dialog"]',
+            '[class*="conversation"]',
+            '[class*="appeal"]'
         ];
 
         for (const selector of appealSelectors) {
@@ -674,23 +773,56 @@ class OmniChatTrafficAnalyzer {
                     // Проверяем, нет ли уже в списке
                     const alreadyFound = appeals.some(a => a.appealId === appealId);
                     
-                    if (!alreadyFound && this.isNewAppeal(el)) {
-                        console.log('✅ Built-in scan found appeal:', appealId);
+                    // Смягчаем проверку - добавляем все обращения, не только очевидно новые
+                    if (!alreadyFound) {
+                        const isNew = this.isNewAppeal(el);
+                        console.log(`🔍 Built-in scan found appeal: ${appealId} (new: ${isNew})`);
                         appeals.push({
                             appealId: appealId,
                             element: el,
-                            source: 'builtInScan'
+                            source: 'builtInScan',
+                            isNewByIndicators: isNew
                         });
                     }
                 }
             });
         }
 
+        // Дополнительный скан для общих элементов чатов
+        if (appeals.length === 0) {
+            console.log('🔍 No appeals found by standard selectors, trying broader search...');
+            const broadSelectors = [
+                'div[class*="sc-"]', // Общие styled-components классы
+                'div[data-testid]',  // Любые элементы с data-testid
+                'li', // Элементы списков
+                'article' // Общие контентные элементы
+            ];
+
+            for (const selector of broadSelectors) {
+                const elements = document.querySelectorAll(selector);
+                for (const el of elements) {
+                    const appealId = this.extractAppealIdFromElement(el);
+                    if (appealId && !appeals.some(a => a.appealId === appealId) && this.isAppealEligibleForProcessing(appealId)) {
+                        console.log(`🔎 Broad search found potential appeal: ${appealId}`);
+                        appeals.push({
+                            appealId: appealId,
+                            element: el,
+                            source: 'broadSearch',
+                            isNewByIndicators: false
+                        });
+                        if (appeals.length >= 10) break; // Ограничиваем количество
+                    }
+                }
+                if (appeals.length > 0) break;
+            }
+        }
+
         console.log(`📊 Total found ${appeals.length} unprocessed appeals`);
-        
+
         // Логируем подробности
         appeals.forEach((appeal, index) => {
-            console.log(`  ${index + 1}. ${appeal.appealId} (${appeal.source}) ${appeal.name ? '- ' + appeal.name : ''}`);
+            const newFlag = appeal.isNewByIndicators ? ' [NEW]' : '';
+            console.log(`  ${index + 1}. ${appeal.appealId} (${appeal.source})${newFlag} ${appeal.name ? '- ' + appeal.name : ''}`);
         });
         
         if (appeals.length > 0 && this.autoResponseEnabled) {
@@ -713,56 +845,93 @@ class OmniChatTrafficAnalyzer {
 
     // ===== DEDUPLICATION AND UNIQUENESS =====
     isAppealEligibleForProcessing(appealId) {
-        // 1. Проверяем в памяти
-        if (this.processedAppeals.has(appealId)) {
-            console.log('⏭️ Appeal already processed (memory):', appealId);
+        // Нормализуем ID для консистентной проверки
+        const normalizedId = appealId.toString().replace(/^#/, '').trim();
+
+        // 1. Проверяем в памяти (нормализованный ID)
+        if (this.processedAppeals.has(normalizedId)) {
+            console.log('⏭️ Appeal already processed (memory):', normalizedId);
             return false;
         }
-        
-        // 2. Проверяем временные метки с усиленным cooldown (60s)
-        const processedTime = this.processedTimestamps.get(appealId);
+
+        // 2. Проверяем похожие ID (защита от вариаций типа 619883264600/619883264601)
+        const baseId = normalizedId.substring(0, normalizedId.length - 1); // Убираем последнюю цифру
+        for (const processedId of this.processedAppeals) {
+            if (processedId.startsWith(baseId) && Math.abs(processedId.length - normalizedId.length) <= 1) {
+                console.log('⏭️ Similar appeal already processed:', processedId, 'vs', normalizedId);
+                return false;
+            }
+        }
+
+        // 3. Проверяем временные метки с кулдауном для приветствий (24 часа)
+        const processedTime = this.processedTimestamps.get(normalizedId);
         if (processedTime) {
             const timeSinceProcessed = Date.now() - processedTime;
-            const cooldownPeriod = 60 * 1000; // Усиленный cooldown до 60 секунд
+            // Используем 24-часовой кулдаун для приветствий, но 60с для обычных сообщений
+            const cooldownPeriod = this.templateConfig.cooldownPeriod || 60 * 1000;
             
             if (timeSinceProcessed < cooldownPeriod) {
-                const secondsAgo = Math.round(timeSinceProcessed / 1000);
-                console.log(`⏰ Appeal processed ${secondsAgo}s ago, still in cooldown:`, appealId);
+                const timeAgo = cooldownPeriod > 3600000 ?
+                    Math.round(timeSinceProcessed / 3600000) + 'h' :
+                    Math.round(timeSinceProcessed / 1000) + 's';
+                console.log(`⏰ Appeal processed ${timeAgo} ago, still in cooldown:`, normalizedId);
                 return false;
             } else {
-                // Cooldown истек, но проверяем дополнительно
-                console.log(`🔄 Cooldown expired, but checking storage for appeal:`, appealId);
-                
-                // Синхронная проверка в storage перед разрешением
-                chrome.storage.local.get(['processedTimestamps'], (result) => {
-                    if (result.processedTimestamps && result.processedTimestamps[appealId]) {
-                        const storedTime = result.processedTimestamps[appealId];
-                        if (Date.now() - storedTime < cooldownPeriod) {
-                            // Обновляем локальный кеш
-                            this.processedTimestamps.set(appealId, storedTime);
-                            this.processedAppeals.add(appealId);
-                            return false;
-                        }
-                    }
-                });
+                // Cooldown истек, разрешаем обработку
+                console.log(`✅ Cooldown expired for appeal:`, normalizedId);
             }
         }
         
-        // 3. Проверяем, что обращение не в очереди
-        const inQueue = this.appealQueue.some(a => a.appealId === appealId);
+        // 4. Проверяем, что обращение не в очереди (используем нормализованный ID)
+        const inQueue = this.appealQueue.some(a => a.appealId === normalizedId || a.appealId === appealId);
         if (inQueue) {
-            console.log('⏳ Appeal already in queue:', appealId);
+            console.log('⏳ Appeal already in queue:', normalizedId);
             return false;
         }
         
         return true;
     }
 
+    // ===== APPEAL OPENING =====
+    async openNewAppeal(appealId, element) {
+        console.log('🚪 Opening new appeal:', appealId);
+
+        // Проверяем, не открыто ли уже
+        if (this.isCurrentlyActiveAppeal(appealId)) {
+            console.log('⚠️ Appeal already open');
+            return false;
+        }
+
+        // Кликаем по элементу обращения
+        if (element) {
+            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            await this.wait(300);
+
+            // Симулируем клик
+            element.click();
+
+            // Дополнительный клик по кликабельным элементам внутри
+            const clickable = element.querySelector('a, button, [role="button"]');
+            if (clickable) {
+                clickable.click();
+            }
+
+            console.log('✅ Clicked on appeal element');
+
+            // Ждем загрузки
+            await this.wait(1000);
+
+            return true;
+        }
+
+        return false;
+    }
+
     // ===== QUEUE MANAGEMENT =====
     addAppealToQueue(appeal) {
-        // Усиленная проверка: глобальный lock на 30 секунд для любого добавления
-        if (window.globalQueueLock && Date.now() - window.globalQueueLock < 30000) {
-            console.log('⏳ Global lock active, skipping add to queue');
+        // Сокращенная проверка: глобальный lock на 5 секунд только для предотвращения дубликатов
+        if (window.globalQueueLock && Date.now() - window.globalQueueLock < 5000) {
+            console.log('⏳ Global lock active (5s), skipping add to queue');
             return false;
         }
         window.globalQueueLock = Date.now();  // Установить lock
@@ -807,7 +976,16 @@ class OmniChatTrafficAnalyzer {
         }
 
         console.log('➕ Adding appeal to queue:', appeal.appealId);
-        
+
+        // НОВОЕ: Если есть элемент и очередь пуста, открываем обращение
+        if (appeal.element && this.appealQueue.length === 0 && !this.isProcessingQueue) {
+            this.openNewAppeal(appeal.appealId, appeal.element).then(opened => {
+                if (opened) {
+                    console.log('✅ New appeal opened automatically');
+                }
+            });
+        }
+
         // Добавляем временную метку для отслеживания
         appeal.addedToQueueAt = Date.now();
         this.appealQueue.push(appeal);
@@ -850,17 +1028,20 @@ class OmniChatTrafficAnalyzer {
         console.log('⚙️ Processing appeal:', appeal.appealId);
         console.log(`   Queue position: 1/${this.appealQueue.length + 1}`);
         console.log(`   Wait time: ${Math.round((Date.now() - appeal.addedToQueueAt) / 1000)}s`);
-        
+
+        // Очищаем lock сразу в начале обработки, чтобы новые обращения могли добавляться
+        window.globalQueueLock = null;
+
         try {
             await this.processAppeal(appeal);
             
-            // Проверяем, отмечено ли уже как обработанное в processAppeal
-            if (!this.processedAppeals.has(appeal.appealId)) {
+            // Проверяем, отмечено ли уже как обработанное в processAppeal (нормализованный ID)
+            const normalizedSuccessId = appeal.appealId.toString().replace(/^#/, '').trim();
+            if (!this.processedAppeals.has(normalizedSuccessId)) {
                 console.log('ℹ️ Marking appeal as processed after successful processing');
-                this.processedAppeals.add(appeal.appealId);
-                this.processedTimestamps.set(appeal.appealId, Date.now());
-                await this.saveProcessedAppealImmediately(appeal.appealId);
-                window.globalQueueLock = null;
+                this.processedAppeals.add(normalizedSuccessId);
+                this.processedTimestamps.set(normalizedSuccessId, Date.now());
+                await this.saveProcessedAppealImmediately(normalizedSuccessId);
             }
             
             console.log('✅ Successfully processed appeal:', appeal.appealId);
@@ -870,12 +1051,12 @@ class OmniChatTrafficAnalyzer {
             console.error('❌ Error processing appeal:', error.message);
             
             // КРИТИЧНО: НЕ ПОВТОРЯЕМ ПРИ ОШИБКАХ
-            // Маркируем как обработанное чтобы избежать спама
+            // Маркируем как обработанное чтобы избежать спама (нормализованный ID)
             console.log('❌ Appeal processing failed, marking as processed to prevent spam');
-            this.processedAppeals.add(appeal.appealId);
-            this.processedTimestamps.set(appeal.appealId, Date.now());
-            await this.saveProcessedAppealImmediately(appeal.appealId);
-            window.globalQueueLock = null;
+            const normalizedErrorId = appeal.appealId.toString().replace(/^#/, '').trim();
+            this.processedAppeals.add(normalizedErrorId);
+            this.processedTimestamps.set(normalizedErrorId, Date.now());
+            await this.saveProcessedAppealImmediately(normalizedErrorId);
         }
         
         // Очищаем текущее обрабатываемое обращение
@@ -905,7 +1086,20 @@ class OmniChatTrafficAnalyzer {
             console.log('⚠️ Appeal already processed, skipping:', appeal.appealId);
             return;
         }
-        
+
+        // НОВАЯ ПРОВЕРКА: Было ли уже отправлено приветствие
+        if (this.greetedAppeals.has(appeal.appealId)) {
+            const greetedTime = this.greetedAppeals.get(appeal.appealId);
+            const timeSinceGreeted = Date.now() - greetedTime;
+            const oneHour = 60 * 60 * 1000;
+
+            if (timeSinceGreeted < oneHour) {
+                console.log('⚠️ Greeting already sent to this appeal:', appeal.appealId);
+                console.log(`   Sent ${Math.round(timeSinceGreeted / 1000)}s ago`);
+                return;
+            }
+        }
+
         console.log('🤖 Starting template response for appeal:', appeal.appealId);
         
         // Step 0: Comprehensive pre-send validation
@@ -920,24 +1114,63 @@ class OmniChatTrafficAnalyzer {
             throw new Error('Invalid appeal ID');
         }
         
-        // Check if UI is ready
+        // Check if UI is ready - improved selectors
         const requiredElements = {
-            messageInput: document.querySelector('textarea[placeholder*="Введите"], input[placeholder*="сообщение"], div[contenteditable="true"]'),
-            templateButton: document.querySelector('button[data-testid="choose-templates"]') || document.querySelector('button[title*="шаблон"]')
+            messageInput: document.querySelector([
+                'textarea[placeholder*="Введите"]',
+                'input[placeholder*="сообщение"]',
+                'div[contenteditable="true"]',
+                'textarea[data-testid*="input"]',
+                'input[data-testid*="input"]',
+                'textarea[class*="input"]',
+                'input[class*="input"]',
+                // Общие селекторы для OmniChat
+                'textarea',
+                'input[type="text"]',
+                '[contenteditable="true"]'
+            ].join(', ')),
+            templateButton: document.querySelector([
+                'button[data-testid="choose-templates"]',
+                'button[title*="шаблон"]',
+                'button[data-testid*="template"]',
+                'button[class*="template"]',
+                // Поиск любых кнопок рядом с полем ввода
+                'button[type="button"]'
+            ].join(', '))
         };
         
         if (!requiredElements.messageInput) {
+            console.log('⚠️ Message input field not found. Available inputs:');
+            const allInputs = document.querySelectorAll('input, textarea, [contenteditable]');
+            allInputs.forEach((input, i) => {
+                console.log(`  ${i+1}. ${input.tagName} - placeholder: "${input.placeholder || 'none'}" - class: "${input.className}"`);
+            });
             throw new Error('Message input field not found - UI not ready');
         }
-        
+
         if (!requiredElements.templateButton) {
+            console.log('⚠️ Template button not found. Available buttons:');
+            const allButtons = document.querySelectorAll('button');
+            allButtons.forEach((btn, i) => {
+                if (i < 10) { // Показываем только первые 10
+                    console.log(`  ${i+1}. title: "${btn.title || 'none'}" - class: "${btn.className}" - text: "${btn.textContent?.substring(0, 20)}"`);
+                }
+            });
             throw new Error('Template button not found - UI not ready');
         }
         
         // Check if we're in the right conversation context
-        const conversationIndicators = document.querySelectorAll('[data-testid*="conversation"], .conversation-title, .chat-header');
+        const conversationIndicators = document.querySelectorAll(
+            '[data-testid*="conversation"], .conversation-title, .chat-header, [class*="chat"], [class*="message"], [data-testid*="chat"]'
+        );
         if (conversationIndicators.length === 0) {
             console.log('⚠️ No conversation context indicators found');
+            console.log('🔍 Available UI elements:');
+            const elements = document.querySelectorAll('[data-testid], [class*="sc-"]');
+            for (let i = 0; i < Math.min(elements.length, 5); i++) {
+                const el = elements[i];
+                console.log(`  ${i+1}. ${el.tagName} - testid: "${el.dataset.testid || 'none'}" - class: "${el.className}"`);
+            }
         }
         
         console.log('✅ Pre-send validation passed');
@@ -949,7 +1182,13 @@ class OmniChatTrafficAnalyzer {
             if (!selected) {
                 console.log('⚠️ Could not select appeal, continuing anyway...');
             }
-            await this.wait(this.templateConfig.clickDelay);
+
+            // Увеличиваем задержку для загрузки UI чата
+            console.log('🔄 Waiting for chat UI to load...');
+            await this.wait(Math.max(this.templateConfig.clickDelay, 2000)); // Минимум 2 секунды
+
+            // Проверяем, что UI загрузился с подробной диагностикой
+            await this.waitForChatUI();
         }
         
         // Step 2: Открываем селектор шаблонов
@@ -1179,13 +1418,23 @@ class OmniChatTrafficAnalyzer {
         // ПЕРЕД любыми другими действиями
         console.log('✅ Successfully processed appeal:', appeal.appealId);
         
-        // КРИТИЧНО: Сохраняем в память немедленно
-        this.processedAppeals.add(appeal.appealId);
-        this.processedTimestamps.set(appeal.appealId, Date.now());
-        
+        // КРИТИЧНО: Сохраняем в память немедленно (нормализованный ID)
+        const normalizedId = appeal.appealId.toString().replace(/^#/, '').trim();
+        this.processedAppeals.add(normalizedId);
+        this.processedTimestamps.set(normalizedId, Date.now());
+
+        // После успешной отправки добавляем в отслеживание приветствий
+        this.greetedAppeals.set(normalizedId, Date.now());
+
+        // Сохраняем в storage
+        const greetedObject = {};
+        this.greetedAppeals.forEach((timestamp, id) => {
+            greetedObject[id] = timestamp;
+        });
+        chrome.storage.local.set({ greetedAppeals: greetedObject });
+
         // КРИТИЧНО: Сразу сохраняем в storage, не откладывая
-        await this.saveProcessedAppealImmediately(appeal.appealId);
-        window.globalQueueLock = null;
+        await this.saveProcessedAppealImmediately(normalizedId);
         
         // Записываем успех
         activity.success = true;
@@ -1203,12 +1452,12 @@ class OmniChatTrafficAnalyzer {
             // Поле пустое - возможно, сообщение было отправлено
             console.log('⚠️ Input field is empty - message might have been sent');
             
-            // На всякий случай маркируем как обработанное
-            this.processedAppeals.add(appeal.appealId);
-            this.processedTimestamps.set(appeal.appealId, Date.now());
-            await this.saveProcessedAppealImmediately(appeal.appealId);
-            window.globalQueueLock = null;
-            
+            // На всякий случай маркируем как обработанное (нормализованный ID)
+            const normalizedId = appeal.appealId.toString().replace(/^#/, '').trim();
+            this.processedAppeals.add(normalizedId);
+            this.processedTimestamps.set(normalizedId, Date.now());
+            await this.saveProcessedAppealImmediately(normalizedId);
+
             console.log('⚠️ Marked as processed to prevent duplicates');
             return; // НЕ добавляем обратно в очередь
         }
@@ -1223,11 +1472,11 @@ class OmniChatTrafficAnalyzer {
         console.log('❌ Processing failed, NOT retrying to prevent spam');
         console.log('Appeal will NOT be added back to queue:', appeal.appealId);
         
-        // Маркируем как обработанное, чтобы не пытаться снова
-        this.processedAppeals.add(appeal.appealId);
-        this.processedTimestamps.set(appeal.appealId, Date.now());
-        await this.saveProcessedAppealImmediately(appeal.appealId);
-        window.globalQueueLock = null;
+        // Маркируем как обработанное, чтобы не пытаться снова (нормализованный ID)
+        const normalizedFailedId = appeal.appealId.toString().replace(/^#/, '').trim();
+        this.processedAppeals.add(normalizedFailedId);
+        this.processedTimestamps.set(normalizedFailedId, Date.now());
+        await this.saveProcessedAppealImmediately(normalizedFailedId);
     }
     
     // Сохраняем активность
@@ -1248,21 +1497,69 @@ class OmniChatTrafficAnalyzer {
         // Method 1: If we have the stored element, try to click it
         if (appeal.element && document.contains(appeal.element)) {
             console.log('✅ Using stored element');
-            
+            console.log('  Element details:', {
+                tagName: appeal.element.tagName,
+                className: appeal.element.className,
+                testid: appeal.element.dataset.testid
+            });
+
             // Make element visible and clickable
             appeal.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
             await this.wait(300);
-            
-            // Click appeal element (single click to prevent duplicates)
-            appeal.element.click();
-            
-            // Try clicking any clickable child if direct click doesn't work
-            const clickable = appeal.element.querySelector('a, button, [role="button"], [data-testid*="item"]');
-            if (clickable) {
-                clickable.click();
+
+            // Пробуем разные способы клика
+            const clickMethods = [
+                // 1. Прямой клик
+                () => {
+                    console.log('  Trying direct click...');
+                    appeal.element.click();
+                },
+                // 2. Клик по дочернему элементу
+                () => {
+                    const clickable = appeal.element.querySelector('a, button, [role="button"], [data-testid*="item"], [data-testid="appeal-preview"]');
+                    if (clickable) {
+                        console.log('  Trying child element click...');
+                        clickable.click();
+                        return true;
+                    }
+                },
+                // 3. Маус события
+                () => {
+                    console.log('  Trying mouse events...');
+                    const rect = appeal.element.getBoundingClientRect();
+                    const centerX = rect.left + rect.width / 2;
+                    const centerY = rect.top + rect.height / 2;
+
+                    ['mousedown', 'mouseup', 'click'].forEach(eventType => {
+                        const event = new MouseEvent(eventType, {
+                            bubbles: true,
+                            cancelable: true,
+                            clientX: centerX,
+                            clientY: centerY
+                        });
+                        appeal.element.dispatchEvent(event);
+                    });
+                }
+            ];
+
+            // Пробуем каждый метод
+            for (const method of clickMethods) {
+                try {
+                    method();
+                    await this.wait(1000); // Увеличиваем задержку
+
+                    // Проверяем, открылся ли чат
+                    const chatOpened = document.querySelector('textarea[placeholder*="Напишите"], textarea[placeholder*="Введите"], [contenteditable="true"]');
+                    if (chatOpened) {
+                        console.log('✅ Chat opened successfully!');
+                        return true;
+                    }
+                } catch (e) {
+                    console.log('  Method failed:', e.message);
+                }
             }
-            
-            await this.wait(500);
+
+            console.log('⚠️ All click methods failed, but continuing...');
             return true;
         }
 
@@ -1288,6 +1585,50 @@ class OmniChatTrafficAnalyzer {
                 }
             } catch (e) {
                 // Invalid selector
+            }
+        }
+
+        // Method 2.5: Поиск по OmniChat-специфичным селекторам
+        console.log('🔍 Searching for appeal by OmniChat selectors...');
+        const omniSelectors = [
+            '[data-testid="appeal-preview"]', // Основной селектор
+            '.sc-dUHDFv.hzjVGF', // Класс из логов
+            '[class*="sc-dUHDFv"]', // Частичное соответствие
+            '#scroll-box-root [data-testid="appeal-preview"]' // Полный путь
+        ];
+
+        for (const selector of omniSelectors) {
+            try {
+                const elements = document.querySelectorAll(selector);
+                console.log(`  Selector "${selector}" found ${elements.length} elements`);
+
+                for (const element of elements) {
+                    // Проверяем, содержит ли элемент имя из appealId
+                    const elementText = element.textContent || '';
+                    const appealIdParts = appeal.appealId.split('_');
+                    const hasMatchingText = appealIdParts.some(part => elementText.includes(part));
+
+                    if (hasMatchingText && element.offsetHeight > 0) {
+                        console.log('✅ Found matching element by text content');
+                        console.log('  Text preview:', elementText.substring(0, 100));
+
+                        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        await this.wait(500);
+
+                        // Пробуем клик
+                        element.click();
+                        await this.wait(1000);
+
+                        // Проверяем результат
+                        const chatOpened = document.querySelector('textarea[placeholder*="Напишите"], textarea[placeholder*="Введите"], [contenteditable="true"]');
+                        if (chatOpened) {
+                            console.log('✅ Chat opened after OmniChat selector click!');
+                            return true;
+                        }
+                    }
+                }
+            } catch (e) {
+                console.log('  Selector error:', e.message);
             }
         }
 
@@ -1555,6 +1896,55 @@ class OmniChatTrafficAnalyzer {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
+    async waitForChatUI(maxAttempts = 8) {
+        console.log('🔄 Advanced chat UI detection...');
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            console.log(`⏳ Attempt ${attempt}/${maxAttempts}: Scanning for chat UI...`);
+
+            // Подробные селекторы для поля ввода сообщения
+            const messageInputSelectors = [
+                'textarea[placeholder*="Напишите"]',
+                'textarea[placeholder*="Введите"]',
+                'textarea[placeholder*="сообщение"]',
+                '[contenteditable="true"]',
+                'textarea[data-testid*="message"]',
+                'textarea[data-testid*="input"]',
+                'input[data-testid*="message"]',
+                'div[data-testid*="editor"]'
+            ];
+
+            for (const selector of messageInputSelectors) {
+                const input = document.querySelector(selector);
+                if (input && input.offsetHeight > 0 && !input.disabled) {
+                    console.log(`✅ Chat UI ready! Found input: ${selector}`);
+                    console.log('  Input details:', {
+                        placeholder: input.placeholder || 'none',
+                        className: input.className,
+                        visible: input.offsetHeight > 0
+                    });
+                    return true;
+                }
+            }
+
+            // Показываем что нашли
+            const allInputs = document.querySelectorAll('input, textarea, [contenteditable]');
+            console.log(`  Found ${allInputs.length} input elements:`);
+            allInputs.forEach((input, i) => {
+                if (i < 5) { // Показываем только первые 5
+                    console.log(`    ${i+1}. ${input.tagName} - placeholder: "${input.placeholder || 'none'}" - class: "${input.className}" - visible: ${input.offsetHeight > 0}`);
+                }
+            });
+
+            if (attempt < maxAttempts) {
+                await this.wait(1500); // Увеличиваем интервал
+            }
+        }
+
+        console.log('⚠️ Chat UI not detected, but continuing with process...');
+        return false;
+    }
+
     saveProcessedAppeal(appealId) {
         chrome.storage.local.get(['processedAppeals', 'processedTimestamps'], (result) => {
             const processed = result.processedAppeals || [];
@@ -1716,15 +2106,35 @@ class OmniChatTrafficAnalyzer {
     
     // Новый метод: Периодическая проверка новых обращений
     startPeriodicAppealCheck() {
-        // Периодическая проверка новых обращений каждые 15 секунд
+        // Увеличиваем интервал до 30 секунд вместо 15
         setInterval(() => {
             if (this.autoResponseEnabled && !this.isProcessingQueue) {
-                console.log('🔍 Periodic appeal check...');
-                this.checkForExistingAppeals();
+                // Проверяем только если нет активных обращений в обработке
+                if (this.appealQueue.length === 0) {
+                    console.log('🔍 Periodic appeal check...');
+                    this.checkForExistingAppeals();
+                } else {
+                    console.log('⏳ Skipping periodic check - queue not empty');
+                }
             }
-        }, 15000); // 15 секунд
-        
-        console.log('🕰️ Periodic appeal check started (every 15 seconds)');
+        }, 30000); // 30 секунд вместо 15
+
+        console.log('🕰️ Periodic appeal check started (every 30 seconds)');
+    }
+
+    startPeriodicCleanup() {
+        setInterval(() => {
+            // Очищаем старые приветствия (старше 2 часов)
+            const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+
+            this.greetedAppeals.forEach((timestamp, appealId) => {
+                if (timestamp < twoHoursAgo) {
+                    this.greetedAppeals.delete(appealId);
+                }
+            });
+
+            console.log('🧹 Cleanup completed, active greetings:', this.greetedAppeals.size);
+        }, 10 * 60 * 1000); // Каждые 10 минут
     }
 
     // ===== EXISTING METHODS (Keep for compatibility) =====
@@ -2242,7 +2652,86 @@ class OmniChatTrafficAnalyzer {
                 this.checkForNewAppeal(fakeElement);
                 return 'Simulated appeal: ' + simulatedAppeal.appealId;
             },
-            
+
+            testGreetingSystem: () => {
+                console.log('👋 Testing IMPROVED greeting system...');
+                console.log('='.repeat(50));
+
+                // Тест 1: Проверяем конфигурацию
+                console.log('🔧 1. Configuration check:');
+                console.log('  - Auto-response enabled:', this.autoResponseEnabled);
+                console.log('  - Template config:', this.templateConfig.templateTitle);
+                console.log('  - Cooldown period:', this.templateConfig.cooldownPeriod / 3600000 + 'h');
+
+                // Тест 2: Проверяем обнаружение чатов
+                console.log('\n🔍 2. Appeal detection test:');
+                const testScenarios = [
+                    { name: 'New chat without timer', class: 'chat-item', hasTimer: false },
+                    { name: 'New chat with timer', class: 'chat-item', hasTimer: true },
+                    { name: 'Already processed chat', class: 'chat-item processed', hasTimer: false }
+                ];
+
+                testScenarios.forEach((scenario, i) => {
+                    console.log(`  Test ${i+1}: ${scenario.name}`);
+                    const testElement = document.createElement('div');
+                    testElement.className = scenario.class;
+                    testElement.textContent = `Test Appeal ${Date.now() + i}`;
+                    if (scenario.hasTimer) {
+                        const timer = document.createElement('span');
+                        timer.textContent = '45 сек';
+                        testElement.appendChild(timer);
+                    }
+
+                    const appealId = this.appealIdSystem.extractOrGenerateAppealId(testElement);
+                    const isNew = appealId ? this.appealIdSystem.isNewUnprocessedAppeal(testElement) : false;
+                    const isEligible = appealId ? this.isAppealEligibleForProcessing(appealId) : false;
+
+                    console.log(`    - Appeal ID: ${appealId}`);
+                    console.log(`    - Is new: ${isNew}`);
+                    console.log(`    - Is eligible: ${isEligible}`);
+
+                    // Маркируем как обработанный для следующих тестов
+                    if (scenario.name.includes('processed')) {
+                        testElement.dataset.omniProcessed = 'true';
+                    }
+                });
+
+                // Тест 3: Симуляция нового чата
+                console.log('\n🎭 3. Simulating new greeting appeal:');
+                const testAppeal = {
+                    appealId: 'GREETING-TEST-' + Date.now(),
+                    element: document.createElement('div'),
+                    timestamp: Date.now(),
+                    type: 'greeting',
+                    test: true
+                };
+
+                testAppeal.element.className = 'chat-item new';
+                testAppeal.element.textContent = 'Test greeting chat #' + testAppeal.appealId;
+                testAppeal.element.dataset.appealId = testAppeal.appealId;
+
+                console.log('  - Created test appeal:', testAppeal.appealId);
+
+                if (this.autoResponseEnabled) {
+                    console.log('  - Adding to queue for processing...');
+                    const success = this.addAppealToQueue(testAppeal);
+                    console.log('  - Queue result:', success ? '✅ Success' : '❌ Failed');
+                    console.log('  - Current queue length:', this.appealQueue.length);
+                } else {
+                    console.log('  - ⚠️ Auto-response disabled, skipping queue');
+                }
+
+                console.log('='.repeat(50));
+                console.log('🏁 Greeting system test completed!');
+
+                return {
+                    testAppealId: testAppeal.appealId,
+                    autoResponseEnabled: this.autoResponseEnabled,
+                    queueLength: this.appealQueue.length,
+                    processedAppeals: this.processedAppeals.size
+                };
+            },
+
             processManual: (appealId) => {
                 const appeal = {
                     appealId: appealId || 'test-' + Date.now(),
@@ -2481,6 +2970,7 @@ class OmniChatTrafficAnalyzer {
                 console.log('');
                 console.log('🧪 TESTING:');
                 console.log('  omniAnalyzer.testAutoResponse() - Check for new appeals');
+                console.log('  omniAnalyzer.testGreetingSystem() - Test IMPROVED greeting system (👍 RECOMMENDED)');
                 console.log('  omniAnalyzer.simulateAppeal(id) - Simulate new appeal');
                 console.log('  omniAnalyzer.processManual(id) - Manually process appeal');
                 console.log('  omniAnalyzer.testSelectAppeal(id) - Test appeal selection');

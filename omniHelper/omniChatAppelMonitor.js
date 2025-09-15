@@ -255,8 +255,7 @@ class AppealMonitor {
 
         // Поиск таймера в специфической структуре HTML
         const timerContainer = element.querySelector('.sc-cewOZc.ioQCCB span') ||
-                              element.querySelector('div[class*="sc-cewOZc"] span') ||
-                              element.querySelector('span:contains("сек")');
+                              element.querySelector('div[class*="sc-cewOZc"] span');
 
         if (timerContainer) {
             const timerText = timerContainer.textContent || '';
