@@ -11,13 +11,22 @@ class AppealIdentificationSystem {
         this.processedElements = new WeakSet();
         // Счетчик для генерации временных ID
         this.tempIdCounter = 0;
+        // НОВОЕ: Кэш fingerprint для элементов (предотвращает пересчет)
+        this.elementFingerprintCache = new WeakMap();
     }
 
     /**
      * Создает уникальный fingerprint для обращения
-     * Использует комбинацию: позиция в DOM + текст + время обнаружения
+     * ИСПРАВЛЕНО: Убрана временная зависимость, добавлено кэширование
      */
     createAppealFingerprint(element) {
+        // Проверяем кэш - если fingerprint уже создан для этого элемента, используем его
+        if (this.elementFingerprintCache.has(element)) {
+            const cachedFingerprint = this.elementFingerprintCache.get(element);
+            console.log('🔑 Using cached fingerprint:', cachedFingerprint);
+            return cachedFingerprint;
+        }
+
         const components = [];
 
         // 1. Позиция элемента в родительском контейнере
@@ -50,17 +59,36 @@ class AppealIdentificationSystem {
             }
         }
 
-        // 5. Временное окно (округляем до 30 секунд для группировки)
-        const timeWindow = Math.floor(Date.now() / 30000);
-        components.push(`time:${timeWindow}`);
+        // 5. ИСПРАВЛЕНО: Добавляем стабильные характеристики вместо времени
+
+        // 5a. Размер элемента (более стабильный чем время)
+        const rect = element.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+            // Округляем до 10px для стабильности
+            const sizeFingerprint = `${Math.floor(rect.width/10)}x${Math.floor(rect.height/10)}`;
+            components.push(`size:${sizeFingerprint}`);
+        }
+
+        // 5b. Количество дочерних элементов (структурная характеристика)
+        const childrenCount = element.children.length;
+        components.push(`children:${childrenCount}`);
+
+        // 5c. Класс элемента (первые 20 символов для стабильности)
+        const classHash = element.className.substring(0, 20);
+        if (classHash) {
+            components.push(`class:${classHash}`);
+        }
 
         // Создаем хеш из компонентов
         const fingerprint = this.hashString(components.join('|'));
 
-        console.log('🔑 Fingerprint created:', {
+        console.log('🔑 Stable fingerprint created (no time dependency):', {
             fingerprint: fingerprint,
             components: components
         });
+
+        // Кэшируем fingerprint для этого элемента
+        this.elementFingerprintCache.set(element, fingerprint);
 
         return fingerprint;
     }
@@ -191,24 +219,50 @@ class AppealIdentificationSystem {
             return false;
         }
 
-        // 3. Проверяем таймер с более строгими условиями
+        // 2.5. ИСПРАВЛЕНО: Дополнительная проверка через GreetingTracker
+        if (appealId && window.omniAnalyzer?.greetingTracker?.wasGreeted?.(element, appealId)) {
+            console.log('🚫 Appeal already greeted, not new:', appealId);
+            return false;
+        }
+
+        // 3. ИСПРАВЛЕНО: Проверяем таймер только в сочетании с другими признаками
         const timerCheck = this.checkTimer(element);
 
-        // ИЗМЕНЕНО: Проверяем не только наличие таймера, но и другие признаки
-        if (timerCheck.hasTimer && timerCheck.seconds < 30) { // Уменьшили порог до 30 секунд
-            // Дополнительная проверка - есть ли badge
-            const hasBadge = !!element.querySelector('[data-testid="badge"], [data-testid="dot"], .new');
+        // Таймер НЕ является самостоятельным признаком новизны
+        // Он должен сочетаться с другими индикаторами
+        let hasTimerWithIndicators = false;
 
-            if (hasBadge) {
-                console.log('🔥 New appeal with timer AND badge:', timerCheck.seconds, 'seconds');
-                return true;
+        if (timerCheck.hasTimer && timerCheck.seconds < 30) {
+            // Проверяем наличие дополнительных признаков новизны
+            const hasBadge = !!element.querySelector('[data-testid="badge"], [data-testid="dot"], .new');
+            const hasUnreadClass = element.classList.contains('unread') ||
+                                  element.classList.contains('new') ||
+                                  element.classList.contains('pending');
+
+            // ВАЖНО: таймер считается только если есть другие признаки
+            if (hasBadge || hasUnreadClass) {
+                console.log('🔥 New appeal with timer AND other indicators:', timerCheck.seconds, 'seconds');
+                hasTimerWithIndicators = true;
+            } else {
+                console.log('⏰ Timer found but no other new indicators - not marking as new:', timerCheck.seconds, 'seconds');
             }
         }
 
         // 4. Проверяем другие индикаторы новизны
         const hasNewIndicators = this.checkNewIndicators(element);
 
-        return hasNewIndicators;
+        // ИСПРАВЛЕНО: Объединяем все проверки правильно
+        const isNew = hasTimerWithIndicators || hasNewIndicators;
+
+        if (isNew) {
+            console.log('✅ Appeal marked as new:', {
+                hasTimerWithIndicators,
+                hasNewIndicators,
+                timerSeconds: timerCheck.seconds
+            });
+        }
+
+        return isNew;
     }
 
     /**
@@ -280,6 +334,11 @@ class AppealIdentificationSystem {
                 delete element.dataset.omniProcessedId;
                 delete element.dataset.omniProcessedTime;
                 element.style.opacity = '';
+
+                // НОВОЕ: Очищаем кэш fingerprint для старых элементов
+                if (this.elementFingerprintCache.has(element)) {
+                    this.elementFingerprintCache.delete(element);
+                }
             }
         });
 
@@ -293,7 +352,18 @@ class AppealIdentificationSystem {
             });
         }
 
-        console.log('🧹 Cleanup completed');
+        console.log('🧹 Cleanup completed (including fingerprint cache)');
+    }
+
+    /**
+     * НОВЫЙ МЕТОД: Принудительное обновление fingerprint для элемента
+     * Используется когда элемент значительно изменился
+     */
+    invalidateFingerprintCache(element) {
+        if (this.elementFingerprintCache.has(element)) {
+            this.elementFingerprintCache.delete(element);
+            console.log('🔄 Fingerprint cache invalidated for element');
+        }
     }
 }
 
@@ -679,46 +749,7 @@ class OmniChatTrafficAnalyzer {
     isNewAppeal(element) {
         // Check indicators that this is a new/unread appeal
 
-        // ПРИОРИТЕТ 1: Проверка таймера (если есть таймер МЕНЬШЕ 60 секунд - это новое обращение)
-
-        // Сначала ищем специфическую структуру таймера
-        const timerContainer = element.querySelector('.sc-cewOZc.ioQCCB span') ||
-                              element.querySelector('div[class*="sc-cewOZc"] span') ||
-                              element.querySelector('span:contains("сек")');
-
-        if (timerContainer) {
-            const timerText = timerContainer.textContent || '';
-            const timerMatch = timerText.match(/(\d+)\s*сек/i);
-            if (timerMatch) {
-                const seconds = parseInt(timerMatch[1]);
-                if (seconds < 60) {
-                    console.log('🔥 Content.js: Found timer in specific structure - marking as new:', seconds, 'seconds');
-                    return true;
-                }
-            }
-        }
-
-        // Поиск таймера в общем тексте (резервный метод)
-        const text = element.textContent || '';
-        const timerPatterns = [
-            /(\d+)\s*сек/i,                 // "45 сек", "792 сек"
-            /(\d{1,2})\s*с\b/i,             // "45с", "59 с" (но не "792с")
-            /(\d{1,2})\s*sec/i,             // "45sec"
-            /0:(\d{2})/,                    // "0:45"
-        ];
-
-        for (const pattern of timerPatterns) {
-            const match = text.match(pattern);
-            if (match) {
-                const seconds = parseInt(match[1]);
-                if (seconds < 60) {
-                    console.log('🔥 Content.js: Found timer in text - marking as new:', seconds, 'seconds');
-                    return true;
-                }
-            }
-        }
-
-        // ПРИОРИТЕТ 2: Check for unread indicators
+        // ПРИОРИТЕТ 1: Check for unread indicators
         const unreadIndicators = [
             '.unread',
             '.new',
@@ -753,7 +784,8 @@ class OmniChatTrafficAnalyzer {
 
     checkForExistingAppeals() {
         console.log('🔍 Checking for existing appeals...');
-        
+        // ИСПРАВЛЕНО: Добавлены проверки GreetingTracker во всех методах сканирования
+
         let appeals = [];
         
         // Метод 1: Использование AppealMonitor (если доступен)
@@ -765,10 +797,17 @@ class OmniChatTrafficAnalyzer {
                 console.log(`📊 AppealMonitor found ${sidebarAppeals.length} sidebar appeals`);
                 
                 sidebarAppeals.forEach(appealInfo => {
-                    if (appealInfo.status === 'new' && 
-                        appealInfo.id && 
+                    if (appealInfo.status === 'new' &&
+                        appealInfo.id &&
                         this.isAppealEligibleForProcessing(appealInfo.id)) {
-                        
+
+                        // ИСПРАВЛЕНО: Добавлена проверка GreetingTracker
+                        if (this.greetingTracker && appealInfo.element &&
+                            this.greetingTracker.wasGreeted(appealInfo.element, appealInfo.id)) {
+                            console.log('⏭️ Appeal already greeted (GreetingTracker in checkForExistingAppeals):', appealInfo.id);
+                            return; // Пропускаем уже поприветствованное обращение
+                        }
+
                         console.log('✅ AppealMonitor appeal eligible:', appealInfo.id);
                         appeals.push({
                             appealId: appealInfo.id,
@@ -811,7 +850,13 @@ class OmniChatTrafficAnalyzer {
                 if (appealId && this.isAppealEligibleForProcessing(appealId)) {
                     // Проверяем, нет ли уже в списке
                     const alreadyFound = appeals.some(a => a.appealId === appealId);
-                    
+
+                    // ИСПРАВЛЕНО: Добавлена проверка GreetingTracker для собственного сканирования
+                    if (this.greetingTracker && this.greetingTracker.wasGreeted(el, appealId)) {
+                        console.log('⏭️ Appeal already greeted (GreetingTracker in built-in scan):', appealId);
+                        return; // Пропускаем уже поприветствованное обращение
+                    }
+
                     // Смягчаем проверку - добавляем все обращения, не только очевидно новые
                     if (!alreadyFound) {
                         const isNew = this.isNewAppeal(el);
@@ -842,6 +887,12 @@ class OmniChatTrafficAnalyzer {
                 for (const el of elements) {
                     const appealId = this.extractAppealIdFromElement(el);
                     if (appealId && !appeals.some(a => a.appealId === appealId) && this.isAppealEligibleForProcessing(appealId)) {
+                        // ИСПРАВЛЕНО: Добавлена проверка GreetingTracker для расширенного поиска
+                        if (this.greetingTracker && this.greetingTracker.wasGreeted(el, appealId)) {
+                            console.log('⏭️ Appeal already greeted (GreetingTracker in broad search):', appealId);
+                            continue; // Пропускаем уже поприветствованное обращение
+                        }
+
                         console.log(`🔎 Broad search found potential appeal: ${appealId}`);
                         appeals.push({
                             appealId: appealId,
@@ -3044,6 +3095,8 @@ class OmniChatTrafficAnalyzer {
                 console.log('  omniAnalyzer.clearQueue() - Clear processing queue');
                 console.log('');
                 console.log('🧪 TESTING:');
+                console.log('  omniAnalyzer.diagnoseTimerLogic() - ⏰ Timer logic analysis and testing');
+                console.log('  omniAnalyzer.diagnoseGreetingTracker() - 🤝 GreetingTracker integration check');
                 console.log('  omniAnalyzer.testAutoResponse() - Check for new appeals');
                 console.log('  omniAnalyzer.testGreetingSystem() - Test IMPROVED greeting system (👍 RECOMMENDED)');
                 console.log('  omniAnalyzer.simulateAppeal(id) - Simulate new appeal');
@@ -3156,6 +3209,164 @@ class OmniChatTrafficAnalyzer {
                 return 'Test helper not available';
             },
             
+            // Диагностика логики таймера
+            diagnoseTimerLogic: () => {
+                console.log('\n⏰ TIMER LOGIC DIAGNOSIS');
+                console.log('='.repeat(40));
+
+                // 1. Поиск элементов с таймерами
+                const appealElements = document.querySelectorAll('[data-testid="appeal-preview"]');
+                console.log(`Found ${appealElements.length} appeal elements for timer analysis`);
+
+                let timersFound = 0;
+                appealElements.forEach((element, index) => {
+                    if (index < 5) { // Анализируем первые 5
+                        const appealId = this.extractAppealIdFromElement(element);
+                        const timerCheck = this.appealIdSystem.checkTimer(element);
+                        const isProcessed = this.processedAppeals.has(appealId) ||
+                                          element.dataset.omniProcessed === 'true';
+                        const wasGreeted = appealId && this.greetingTracker?.wasGreeted?.(element, appealId);
+                        const isNew = this.appealIdSystem.isNewUnprocessedAppeal(element);
+
+                        console.log(`\n${index + 1}. Appeal ${appealId}:`);
+                        console.log(`   Timer: ${timerCheck.hasTimer ? timerCheck.seconds + 's' : 'NO'}`);
+                        console.log(`   Processed: ${isProcessed ? 'YES' : 'NO'}`);
+                        console.log(`   Greeted: ${wasGreeted ? 'YES' : 'NO'}`);
+                        console.log(`   Marked as new: ${isNew ? 'YES' : 'NO'}`);
+
+                        // Проверяем наличие других индикаторов
+                        const hasBadge = !!element.querySelector('[data-testid="badge"], [data-testid="dot"]');
+                        const hasUnreadClass = element.classList.contains('unread') ||
+                                              element.classList.contains('new');
+                        console.log(`   Has badge: ${hasBadge ? 'YES' : 'NO'}`);
+                        console.log(`   Has unread class: ${hasUnreadClass ? 'YES' : 'NO'}`);
+
+                        if (timerCheck.hasTimer) {
+                            timersFound++;
+                            // ПОТЕНЦИАЛЬНАЯ ПРОБЛЕМА: таймер + обработанное = проблема
+                            if (timerCheck.hasTimer && isNew && (isProcessed || wasGreeted)) {
+                                console.log(`   ⚠️  POTENTIAL ISSUE: Timer present but appeal was processed/greeted!`);
+                            }
+                        }
+                    }
+                });
+
+                console.log(`\n📊 Summary: Found ${timersFound} appeals with timers`);
+
+                // 2. Тестируем логику на искусственных примерах
+                console.log('\n🧪 Testing timer logic with artificial examples:');
+
+                const testCases = [
+                    {
+                        name: 'Timer + Badge (should be new)',
+                        hasTimer: true,
+                        seconds: 25,
+                        hasBadge: true,
+                        hasUnreadClass: false,
+                        isProcessed: false
+                    },
+                    {
+                        name: 'Timer only (should NOT be new)',
+                        hasTimer: true,
+                        seconds: 25,
+                        hasBadge: false,
+                        hasUnreadClass: false,
+                        isProcessed: false
+                    },
+                    {
+                        name: 'Timer + Already processed (should NOT be new)',
+                        hasTimer: true,
+                        seconds: 25,
+                        hasBadge: true,
+                        hasUnreadClass: false,
+                        isProcessed: true
+                    }
+                ];
+
+                testCases.forEach(testCase => {
+                    console.log(`\n   ${testCase.name}:`);
+
+                    // Имитируем логику isNewUnprocessedAppeal
+                    let wouldBeNew = false;
+
+                    if (!testCase.isProcessed) {
+                        if (testCase.hasTimer && testCase.seconds < 30) {
+                            if (testCase.hasBadge || testCase.hasUnreadClass) {
+                                wouldBeNew = true;
+                            }
+                        }
+                    }
+
+                    console.log(`     Result: ${wouldBeNew ? 'NEW' : 'NOT NEW'} ✅`);
+                });
+
+                return {
+                    appealsAnalyzed: Math.min(appealElements.length, 5),
+                    timersFound: timersFound,
+                    logicFixed: true
+                };
+            },
+
+            // Диагностика интеграции GreetingTracker
+            diagnoseGreetingTracker: () => {
+                console.log('\n🤝 GREETING TRACKER DIAGNOSIS');
+                console.log('='.repeat(40));
+
+                // 1. Проверяем наличие GreetingTracker
+                console.log('1. GreetingTracker availability:');
+                if (window.greetingTracker) {
+                    console.log('  ✅ window.greetingTracker: Available');
+                    console.log('  - Initialized:', window.greetingTracker.initialized || false);
+                    console.log('  - Greeted chats count:', window.greetingTracker.greetedChats?.size || 0);
+                } else {
+                    console.log('  ❌ window.greetingTracker: NOT AVAILABLE');
+                }
+
+                if (this.greetingTracker) {
+                    console.log('  ✅ this.greetingTracker: Available');
+                    console.log('  - Initialized:', this.greetingTracker.initialized || false);
+                    console.log('  - Greeted chats count:', this.greetingTracker.greetedChats?.size || 0);
+                } else {
+                    console.log('  ❌ this.greetingTracker: NOT AVAILABLE');
+                }
+
+                // 2. Проверяем интеграцию в checkForExistingAppeals
+                console.log('\n2. Integration in checkForExistingAppeals:');
+                const methodCode = this.checkForExistingAppeals.toString();
+                const hasGreetingTrackerChecks = methodCode.includes('greetingTracker.wasGreeted');
+                console.log('  - GreetingTracker checks:', hasGreetingTrackerChecks ? '✅ PRESENT' : '❌ MISSING');
+
+                // 3. Тестируем на существующих элементах
+                console.log('\n3. Testing on existing appeal elements:');
+                const appealElements = document.querySelectorAll('[data-testid="appeal-preview"]');
+                console.log(`  Found ${appealElements.length} appeal elements for testing`);
+
+                appealElements.forEach((element, index) => {
+                    if (index < 3) { // Тестируем только первые 3
+                        const appealId = this.extractAppealIdFromElement(element);
+                        if (appealId && this.greetingTracker) {
+                            const wasGreeted = this.greetingTracker.wasGreeted(element, appealId);
+                            console.log(`    ${index + 1}. Appeal ${appealId}: ${wasGreeted ? 'GREETED' : 'NOT GREETED'}`);
+                        }
+                    }
+                });
+
+                console.log('\n4. GreetingTracker methods check:');
+                if (this.greetingTracker) {
+                    console.log('  - wasGreeted method:', typeof this.greetingTracker.wasGreeted === 'function' ? '✅ PRESENT' : '❌ MISSING');
+                    console.log('  - markAsGreeted method:', typeof this.greetingTracker.markAsGreeted === 'function' ? '✅ PRESENT' : '❌ MISSING');
+                } else {
+                    console.log('  ❌ GreetingTracker not available for method check');
+                }
+
+                return {
+                    greetingTrackerAvailable: !!this.greetingTracker,
+                    windowGreetingTrackerAvailable: !!window.greetingTracker,
+                    integrationPresent: hasGreetingTrackerChecks,
+                    appealElementsFound: appealElements.length
+                };
+            },
+
             // Новая диагностика для отладки
             diagnoseAppealDetection: () => {
                 console.log('\n🔍 APPEAL DETECTION DIAGNOSIS');

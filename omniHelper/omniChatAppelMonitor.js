@@ -3,8 +3,12 @@ class AppealMonitor {
         this.appeals = new Map();
         this.isMonitoring = false;
         this.checkInterval = null;
-        
-        console.log('📊 Appeal Monitor initialized');
+        this.periodicInterval = null;
+        this.domObserver = null;
+        this.lastDetectionTime = new Map(); // Для предотвращения дублирования
+        this.detectionSources = new Map(); // Отслеживание источников обнаружения
+
+        console.log('📊 Appeal Monitor initialized with parallel detection mechanisms');
     }
     
     // Запуск мониторинга
@@ -13,20 +17,30 @@ class AppealMonitor {
             console.log('⚠️ Monitor already running');
             return;
         }
-        
+
         this.isMonitoring = true;
-        console.log('🟢 Monitor started');
-        
-        // Первая проверка
-        this.checkForAppeals();
-        
-        // Проверка каждые 10 секунд (уменьшаем частоту)
-        this.checkInterval = setInterval(() => {
-            this.checkForAppeals();
-        }, 10000);
-        
-        // Также слушаем сетевые запросы
+        console.log('🟢 Parallel Appeal Monitor started');
+
+        // 1. DOM Observer (постоянный мониторинг)
+        this.startDOMObserver();
+
+        // 2. Периодическая проверка каждые 30 секунд
+        this.startPeriodicCheck();
+
+        // 3. AppealMonitor проверка каждые 10 секунд (существующая)
+        this.startAppealMonitorCheck();
+
+        // 4. Сетевой перехват
         this.interceptNetwork();
+
+        // Первичная проверка
+        this.checkForAppeals('initial');
+
+        console.log('🔄 All detection mechanisms activated:');
+        console.log('  - DOM Observer: Real-time detection');
+        console.log('  - Periodic Check: Every 30 seconds');
+        console.log('  - AppealMonitor: Every 10 seconds');
+        console.log('  - Network Intercept: Active');
     }
     
     // Остановка мониторинга
@@ -35,12 +49,237 @@ class AppealMonitor {
             console.log('⚠️ Monitor not running');
             return;
         }
-        
+
         this.isMonitoring = false;
-        clearInterval(this.checkInterval);
-        console.log('🔴 Monitor stopped');
+
+        // Останавливаем все механизмы
+        if (this.checkInterval) {
+            clearInterval(this.checkInterval);
+            this.checkInterval = null;
+        }
+
+        if (this.periodicInterval) {
+            clearInterval(this.periodicInterval);
+            this.periodicInterval = null;
+        }
+
+        if (this.domObserver) {
+            this.domObserver.disconnect();
+            this.domObserver = null;
+        }
+
+        console.log('🔴 Parallel Appeal Monitor stopped (all mechanisms deactivated)');
     }
-    
+
+    // === МЕХАНИЗМ 1: DOM Observer ===
+    startDOMObserver() {
+        if (!window.MutationObserver) {
+            console.log('⚠️ MutationObserver not supported');
+            return;
+        }
+
+        this.domObserver = new MutationObserver((mutations) => {
+            let foundChanges = false;
+
+            mutations.forEach((mutation) => {
+                // Проверяем добавленные узлы
+                if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                    mutation.addedNodes.forEach((node) => {
+                        if (node.nodeType === Node.ELEMENT_NODE) {
+                            // Проверяем, содержит ли новый элемент обращения
+                            const appealElements = this.findAppealElementsInNode(node);
+                            if (appealElements.length > 0) {
+                                foundChanges = true;
+                                console.log(`🔍 DOM Observer detected ${appealElements.length} new appeal elements`);
+                                this.processAppealElements(appealElements, 'dom-observer');
+                            }
+                        }
+                    });
+                }
+
+                // Проверяем изменения атрибутов (например, классов или data-атрибутов)
+                if (mutation.type === 'attributes' &&
+                    (mutation.attributeName === 'class' ||
+                     mutation.attributeName === 'data-testid' ||
+                     mutation.attributeName?.startsWith('data-'))) {
+
+                    const element = mutation.target;
+                    if (this.couldBeAppealElement(element)) {
+                        foundChanges = true;
+                        console.log('🔍 DOM Observer detected attribute change in potential appeal element');
+                        this.processAppealElements([element], 'dom-observer-attr');
+                    }
+                }
+            });
+
+            if (foundChanges) {
+                // Debounced check to avoid excessive processing
+                setTimeout(() => this.checkForAppeals('dom-observer'), 100);
+            }
+        });
+
+        // Наблюдаем за изменениями в основных контейнерах
+        const observeTargets = [
+            document.querySelector('#scroll-box-root'),
+            document.querySelector('body'),
+            document.querySelector('[data-testid*="appeal"]')?.parentElement
+        ].filter(Boolean);
+
+        observeTargets.forEach(target => {
+            this.domObserver.observe(target, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ['class', 'data-testid', 'data-appeal-id']
+            });
+        });
+
+        console.log(`✅ DOM Observer started (watching ${observeTargets.length} containers)`);
+    }
+
+    // === МЕХАНИЗМ 2: Периодическая проверка (30 секунд) ===
+    startPeriodicCheck() {
+        this.periodicInterval = setInterval(() => {
+            console.log('⏰ Periodic check (30s) triggered');
+            this.checkForAppeals('periodic-30s');
+        }, 30000);
+
+        console.log('✅ Periodic check started (every 30 seconds)');
+    }
+
+    // === МЕХАНИЗМ 3: AppealMonitor проверка (10 секунд) ===
+    startAppealMonitorCheck() {
+        this.checkInterval = setInterval(() => {
+            console.log('⏰ AppealMonitor check (10s) triggered');
+            this.checkForAppeals('appeal-monitor-10s');
+        }, 10000);
+
+        console.log('✅ AppealMonitor check started (every 10 seconds)');
+    }
+
+    // Вспомогательные методы для DOM Observer
+    findAppealElementsInNode(node) {
+        const appealSelectors = [
+            '[data-testid="appeal-preview"]',
+            '.sc-dUHDFv.diHQGp',
+            '[data-appeal-id]',
+            '[data-appealid]',
+            '.appeal-item'
+        ];
+
+        let elements = [];
+
+        // Проверяем сам элемент
+        for (const selector of appealSelectors) {
+            try {
+                if (node.matches && node.matches(selector)) {
+                    elements.push(node);
+                    break;
+                }
+            } catch (e) {
+                // Игнорируем ошибки селекторов
+            }
+        }
+
+        // Проверяем дочерние элементы
+        for (const selector of appealSelectors) {
+            try {
+                const childElements = node.querySelectorAll ? node.querySelectorAll(selector) : [];
+                elements.push(...Array.from(childElements));
+            } catch (e) {
+                // Игнорируем ошибки селекторов
+            }
+        }
+
+        return [...new Set(elements)]; // Убираем дубликаты
+    }
+
+    couldBeAppealElement(element) {
+        // Проверяем, может ли элемент быть обращением
+        const testId = element.getAttribute('data-testid');
+        const className = element.className || '';
+
+        return testId === 'appeal-preview' ||
+               className.includes('appeal') ||
+               className.includes('diHQGp') ||
+               element.querySelector('[data-testid="badge"]') ||
+               element.querySelector('.timer');
+    }
+
+    processAppealElements(elements, source) {
+        elements.forEach(element => {
+            const appealInfo = this.extractAppealInfo(element);
+            if (appealInfo && appealInfo.id) {
+                appealInfo.detectionSource = source;
+                this.handleDetectedAppeal(appealInfo, source);
+            }
+        });
+    }
+
+    // === СИСТЕМА ДЕДУПЛИКАЦИИ ===
+    handleDetectedAppeal(appealInfo, source) {
+        const appealId = appealInfo.id;
+        const now = Date.now();
+
+        // Проверяем дедупликацию
+        if (this.isDuplicateDetection(appealId, source, now)) {
+            return;
+        }
+
+        // Обновляем время последнего обнаружения
+        if (!this.lastDetectionTime.has(appealId)) {
+            this.lastDetectionTime.set(appealId, new Map());
+        }
+        this.lastDetectionTime.get(appealId).set(source, now);
+
+        // Обновляем источники обнаружения
+        if (!this.detectionSources.has(appealId)) {
+            this.detectionSources.set(appealId, new Set());
+        }
+        this.detectionSources.get(appealId).add(source);
+
+        console.log(`🔍 Appeal ${appealId} detected by ${source} (sources: ${Array.from(this.detectionSources.get(appealId)).join(', ')})`);
+
+        // Обрабатываем как раньше
+        if (!this.appeals.has(appealId)) {
+            this.appeals.set(appealId, appealInfo);
+            if (appealInfo.status === 'new') {
+                console.log(`🆕 NEW appeal detected by ${source}:`, appealId);
+                this.onNewAppeal(appealInfo);
+            }
+        } else {
+            // Обновляем существующее обращение
+            const existing = this.appeals.get(appealId);
+            if (existing.status !== appealInfo.status) {
+                console.log(`🔄 Appeal status changed (${source}):`, appealId, existing.status, '->', appealInfo.status);
+            }
+            this.appeals.set(appealId, { ...existing, ...appealInfo, detectionSource: source });
+        }
+    }
+
+    isDuplicateDetection(appealId, source, currentTime) {
+        const DEDUPLICATION_WINDOW = 5000; // 5 секунд
+
+        if (!this.lastDetectionTime.has(appealId)) {
+            return false;
+        }
+
+        const sourceMap = this.lastDetectionTime.get(appealId);
+        const lastTime = sourceMap.get(source);
+
+        if (!lastTime) {
+            return false;
+        }
+
+        const timeDiff = currentTime - lastTime;
+        if (timeDiff < DEDUPLICATION_WINDOW) {
+            console.log(`⏭️ Duplicate detection prevented: ${appealId} by ${source} (${timeDiff}ms ago)`);
+            return true;
+        }
+
+        return false;
+    }
+
     // Поиск обращений в левом боковом меню
     findAppealsInSidebar() {
         // Специфичные селекторы для реальной структуры OmniChat
@@ -128,7 +367,9 @@ class AppealMonitor {
     }
 
     // Поиск обращений на странице
-    checkForAppeals() {
+    checkForAppeals(source = 'manual') {
+        console.log(`🔍 Checking for appeals (source: ${source})`);
+
         // Сначала ищем в боковом меню
         const sidebarAppeals = this.findAppealsInSidebar();
         
@@ -162,32 +403,15 @@ class AppealMonitor {
         // Убираем дубликаты
         foundElements = [...new Set(foundElements)];
         
-        // Анализируем каждый элемент
+        // Анализируем каждый элемент с новой системой обнаружения
         foundElements.forEach(element => {
             const appealInfo = this.extractAppealInfo(element);
             if (appealInfo && appealInfo.id) {
                 // Отмечаем, если обращение из бокового меню
                 appealInfo.fromSidebar = sidebarAppeals.includes(element);
-                
-                if (!this.appeals.has(appealInfo.id)) {
-                    // Новое обращение!
-                    this.appeals.set(appealInfo.id, appealInfo);
-                    console.log('🆕 New appeal detected:', appealInfo.id, 'Status:', appealInfo.status);
-                    // Ограничиваем вызов onNewAppeal только для новых обращений
-                    if (appealInfo.status === 'new') {
-                        this.onNewAppeal(appealInfo);
-                        
-                        // Note: OmniAnalyzer synchronization is now handled through 
-                        // method override in content.js for better coordination
-                    }
-                } else {
-                    // Обновляем информацию
-                    const existing = this.appeals.get(appealInfo.id);
-                    if (existing.status !== appealInfo.status) {
-                        console.log('🔄 Appeal status changed:', appealInfo.id, existing.status, '->', appealInfo.status);
-                    }
-                    this.appeals.set(appealInfo.id, appealInfo);
-                }
+
+                // Используем новую систему обработки с дедупликацией
+                this.handleDetectedAppeal(appealInfo, source);
             }
         });
         
@@ -345,46 +569,7 @@ class AppealMonitor {
     isNewAppeal(element) {
         // Проверяем различные индикаторы нового сообщения
 
-        // 1. Проверка таймера (приоритет!) - если есть таймер МЕНЬШЕ 60 секунд
-
-        // Сначала ищем специфическую структуру таймера
-        const timerContainer = element.querySelector('.sc-cewOZc.ioQCCB span') ||
-                              element.querySelector('div[class*="sc-cewOZc"] span') ||
-                              element.querySelector('span:contains("сек")');
-
-        if (timerContainer) {
-            const timerText = timerContainer.textContent || '';
-            const timerMatch = timerText.match(/(\d+)\s*сек/i);
-            if (timerMatch) {
-                const seconds = parseInt(timerMatch[1]);
-                if (seconds < 60) {
-                    console.log('🔥 AppealMonitor: Found timer in specific structure - marking as new:', seconds, 'seconds');
-                    return true;
-                }
-            }
-        }
-
-        // Резервный поиск таймера в общем тексте
-        const text = element.textContent || '';
-        const timerPatterns = [
-            /(\d+)\s*сек/i,                 // "45 сек", "30 сек"
-            /(\d{1,2})\s*с\b/i,             // "45с", "59 с" (но не "792с")
-            /(\d{1,2})\s*sec/i,             // "45sec"
-            /0:(\d{2})/,                    // "0:45"
-        ];
-
-        for (const pattern of timerPatterns) {
-            const match = text.match(pattern);
-            if (match) {
-                const seconds = parseInt(match[1]);
-                if (seconds < 60) {
-                    console.log('🔥 AppealMonitor: Found timer in text - marking as new:', seconds, 'seconds');
-                    return true;
-                }
-            }
-        }
-
-        // 2. Классы
+        // 1. Классы
         const classList = element.className || '';
         if (classList.includes('unread') ||
             classList.includes('new') ||
@@ -610,9 +795,6 @@ class AppealMonitor {
                 'button[title*="template"]',
                 'button[title="Выбрать шаблон"]',
                 'button[aria-label*="шаблон"]',
-                // Поиск по содержимому
-                'button:has(span:contains("Шаблон"))',
-                'button:has(span:contains("шаблон"))',
                 // По визуальным признакам (среди кнопок отправки)
                 '.message-input-container button:not([disabled])',
                 '.input-container button:not([disabled])',
@@ -854,14 +1036,119 @@ class AppealMonitor {
             total: this.appeals.size,
             new: 0,
             read: 0,
-            unknown: 0
+            unknown: 0,
+            detectionSources: {}
         };
-        
+
         this.appeals.forEach(appeal => {
             stats[appeal.status]++;
+
+            // Подсчитываем источники обнаружения
+            const source = appeal.detectionSource || 'unknown';
+            stats.detectionSources[source] = (stats.detectionSources[source] || 0) + 1;
         });
-        
+
         return stats;
+    }
+
+    // Расширенная диагностика для множественных механизмов обнаружения
+    getDetectionStats() {
+        const detectionStats = {
+            mechanisms: {
+                'dom-observer': 0,
+                'periodic-30s': 0,
+                'appeal-monitor-10s': 0,
+                'network': 0,
+                'initial': 0,
+                'manual': 0,
+                'other': 0
+            },
+            multipleDetections: 0,
+            totalAppeals: this.appeals.size,
+            deduplicatedEvents: 0
+        };
+
+        // Анализируем источники обнаружения для каждого обращения
+        this.detectionSources.forEach((sources, appealId) => {
+            sources.forEach(source => {
+                if (detectionStats.mechanisms.hasOwnProperty(source)) {
+                    detectionStats.mechanisms[source]++;
+                } else {
+                    detectionStats.mechanisms.other++;
+                }
+            });
+
+            if (sources.size > 1) {
+                detectionStats.multipleDetections++;
+            }
+        });
+
+        console.log('\n📊 DETECTION MECHANISMS PERFORMANCE:\n');
+        console.log('Detection sources:', detectionStats.mechanisms);
+        console.log(`Appeals detected by multiple sources: ${detectionStats.multipleDetections}/${detectionStats.totalAppeals}`);
+        console.log(`Deduplication effectiveness: Active`);
+
+        return detectionStats;
+    }
+
+    // Тестирование всех механизмов обнаружения
+    async testAllDetectionMechanisms() {
+        console.log('\n🧪 TESTING ALL DETECTION MECHANISMS\n');
+
+        const results = {
+            domObserver: false,
+            periodicCheck: false,
+            appealMonitorCheck: false,
+            networkIntercept: false
+        };
+
+        // Тест 1: DOM Observer
+        console.log('1. Testing DOM Observer...');
+        if (this.domObserver) {
+            results.domObserver = true;
+            console.log('✅ DOM Observer is active');
+        } else {
+            console.log('❌ DOM Observer is not active');
+        }
+
+        // Тест 2: Periodic Check
+        console.log('2. Testing Periodic Check (30s)...');
+        if (this.periodicInterval) {
+            results.periodicCheck = true;
+            console.log('✅ Periodic Check is active');
+        } else {
+            console.log('❌ Periodic Check is not active');
+        }
+
+        // Тест 3: AppealMonitor Check
+        console.log('3. Testing AppealMonitor Check (10s)...');
+        if (this.checkInterval) {
+            results.appealMonitorCheck = true;
+            console.log('✅ AppealMonitor Check is active');
+        } else {
+            console.log('❌ AppealMonitor Check is not active');
+        }
+
+        // Тест 4: Network Intercept
+        console.log('4. Testing Network Intercept...');
+        if (window.fetch && window.fetch.toString().includes('appealId')) {
+            results.networkIntercept = true;
+            console.log('✅ Network Intercept is active');
+        } else {
+            console.log('❌ Network Intercept may not be active');
+        }
+
+        // Запускаем ручную проверку для тестирования
+        console.log('\n5. Running manual detection test...');
+        this.checkForAppeals('test');
+
+        // Ожидаем немного для проверки работы механизмов
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        const activeCount = Object.values(results).filter(Boolean).length;
+        console.log(`\n📊 Active mechanisms: ${activeCount}/4`);
+
+        return results;
     }
     
     // Список всех обращений
@@ -884,30 +1171,37 @@ class AppealMonitor {
 // Создаем глобальный экземпляр монитора
 window.appealMonitor = new AppealMonitor();
 
-console.log('\n📊 APPEAL MONITOR READY (MANUAL MODE)\n');
+console.log('\n📊 PARALLEL APPEAL MONITOR READY\n');
 console.log('Basic Commands:');
-console.log('  appealMonitor.start()                - Start monitoring');
-console.log('  appealMonitor.stop()                 - Stop monitoring');
-console.log('  appealMonitor.getStats()             - Get statistics');
-console.log('  appealMonitor.listAppeals()          - List all appeals');
-console.log('  appealMonitor.clear()                - Clear all data');
-console.log('  appealMonitor.checkForAppeals()      - Manual check');
-console.log('\nDiagnostics:');
-console.log('  appealMonitor.diagnoseAppeals()      - 🔍 DIAGNOSTIC REPORT (start here!)');
-console.log('  appealMonitor.findAppealsInSidebar() - Find appeals in sidebar');
-console.log('  appealMonitor.getSidebarAppeals()    - Get sidebar appeals list');
-console.log('  appealMonitor.findActiveAppeal()     - Find active appeal element');
-console.log('  appealMonitor.selectActiveAppeal()   - Select and click active appeal');
+console.log('  appealMonitor.start()                     - Start all detection mechanisms');
+console.log('  appealMonitor.stop()                      - Stop all detection mechanisms');
+console.log('  appealMonitor.getStats()                  - Get statistics with detection sources');
+console.log('  appealMonitor.listAppeals()               - List all appeals');
+console.log('  appealMonitor.clear()                     - Clear all data');
+console.log('  appealMonitor.checkForAppeals()           - Manual check');
+console.log('\nParallel Detection Diagnostics:');
+console.log('  appealMonitor.getDetectionStats()         - 📊 DETECTION PERFORMANCE REPORT');
+console.log('  appealMonitor.testAllDetectionMechanisms() - 🧪 TEST ALL MECHANISMS');
+console.log('  appealMonitor.diagnoseAppeals()           - 🔍 DIAGNOSTIC REPORT (start here!)');
+console.log('  appealMonitor.findAppealsInSidebar()      - Find appeals in sidebar');
+console.log('  appealMonitor.getSidebarAppeals()         - Get sidebar appeals list');
+console.log('  appealMonitor.findActiveAppeal()          - Find active appeal element');
+console.log('  appealMonitor.selectActiveAppeal()        - Select and click active appeal');
 console.log('\nTemplate Automation:');
-console.log('  appealMonitor.testSendTemplate()     - Test template sending (dry run)');
-console.log('  appealMonitor.quickSendTemplate()    - Send template to active appeal');
+console.log('  appealMonitor.testSendTemplate()          - Test template sending (dry run)');
+console.log('  appealMonitor.quickSendTemplate()         - Send template to active appeal');
 console.log('  appealMonitor.sendTemplateToActiveAppeal(keyword, send) - Full control');
 console.log('\n🚀 Quick Start:');
-console.log('  1. appealMonitor.diagnoseAppeals()   - Check if appeals are detected');
-console.log('  2. appealMonitor.testSendTemplate()  - Test the full process (safe)');
-console.log('  3. appealMonitor.quickSendTemplate() - Send template to active appeal');
-console.log('\n🔄 CONTROLLED AUTO-MONITORING ENABLED');
-console.log('\n💡 New appeals will be detected and processed automatically (with spam protection)');
+console.log('  1. appealMonitor.testAllDetectionMechanisms() - Test all detection systems');
+console.log('  2. appealMonitor.getDetectionStats()      - View detection performance');
+console.log('  3. appealMonitor.diagnoseAppeals()        - Check if appeals are detected');
+console.log('  4. appealMonitor.testSendTemplate()       - Test the full process (safe)');
+console.log('\n🔄 PARALLEL DETECTION MECHANISMS:');
+console.log('  - DOM Observer: Real-time detection of DOM changes');
+console.log('  - Periodic Check: Every 30 seconds comprehensive scan');
+console.log('  - AppealMonitor: Every 10 seconds focused check');
+console.log('  - Network Intercept: Monitors network requests for appealId');
+console.log('\n🛡️ DEDUPLICATION: Active (prevents multiple detections of same appeal)');
 
 // КОНТРОЛИРУЕМЫЙ АВТОМАТИЧЕСКИЙ ЗАПУСК
 // Без спама, но с обнаружением
