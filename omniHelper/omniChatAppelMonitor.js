@@ -8,6 +8,12 @@ class AppealMonitor {
         this.lastDetectionTime = new Map(); // Для предотвращения дублирования
         this.detectionSources = new Map(); // Отслеживание источников обнаружения
 
+        // НОВОЕ: Добавляем кэш для стабильной идентификации элементов
+        this.elementToIdCache = new WeakMap(); // Кэш элемент -> стабильный ID
+        this.contentToIdCache = new Map(); // Кэш контента -> стабильный ID для дедупликации
+        this.stableIdCounter = 1; // Счетчик для генерации стабильных ID
+        this.domChangeThrottle = new Map(); // Throttling для DOM изменений
+
         console.log('📊 Appeal Monitor initialized with parallel detection mechanisms');
     }
     
@@ -104,17 +110,21 @@ class AppealMonitor {
                      mutation.attributeName?.startsWith('data-'))) {
 
                     const element = mutation.target;
-                    if (this.couldBeAppealElement(element)) {
-                        foundChanges = true;
-                        console.log('🔍 DOM Observer detected attribute change in potential appeal element');
-                        this.processAppealElements([element], 'dom-observer-attr');
+
+                    // ИСПРАВЛЕНИЕ: Проверяем throttling для этого элемента
+                    if (!this.couldBeAppealElement(element) || this.isElementChangeThrottled(element)) {
+                        return;
                     }
+
+                    foundChanges = true;
+                    console.log('🔍 DOM Observer detected attribute change in potential appeal element');
+                    this.processAppealElements([element], 'dom-observer-attr');
                 }
             });
 
             if (foundChanges) {
-                // Debounced check to avoid excessive processing
-                setTimeout(() => this.checkForAppeals('dom-observer'), 100);
+                // ИСПРАВЛЕНИЕ: Увеличиваем debounce для уменьшения частоты проверок
+                setTimeout(() => this.checkForAppeals('dom-observer'), 500);
             }
         });
 
@@ -140,21 +150,21 @@ class AppealMonitor {
     // === МЕХАНИЗМ 2: Периодическая проверка (30 секунд) ===
     startPeriodicCheck() {
         this.periodicInterval = setInterval(() => {
-            console.log('⏰ Periodic check (30s) triggered');
-            this.checkForAppeals('periodic-30s');
-        }, 30000);
+            // ИСПРАВЛЕНИЕ: Увеличиваем интервал до 60 секунд для снижения нагрузки
+            this.checkForAppeals('periodic-60s');
+        }, 60000);
 
-        console.log('✅ Periodic check started (every 30 seconds)');
+        console.log('✅ Periodic check started (every 60 seconds)');
     }
 
     // === МЕХАНИЗМ 3: AppealMonitor проверка (10 секунд) ===
     startAppealMonitorCheck() {
         this.checkInterval = setInterval(() => {
-            console.log('⏰ AppealMonitor check (10s) triggered');
-            this.checkForAppeals('appeal-monitor-10s');
-        }, 10000);
+            // ИСПРАВЛЕНИЕ: Увеличиваем интервал до 30 секунд для снижения нагрузки
+            this.checkForAppeals('appeal-monitor-30s');
+        }, 30000);
 
-        console.log('✅ AppealMonitor check started (every 10 seconds)');
+        console.log('✅ AppealMonitor check started (every 30 seconds)');
     }
 
     // Вспомогательные методы для DOM Observer
@@ -195,6 +205,25 @@ class AppealMonitor {
     }
 
     couldBeAppealElement(element) {
+        // ИСПРАВЛЕНИЕ: Исключаем modal окна шаблонов
+        const text = element.textContent || '';
+
+        // Фильтруем modal шаблонов и служебные элементы
+        const isTemplateModal =
+            text.includes('Шаблоны ответов') ||
+            text.includes('Категории') ||
+            text.includes('НТПВС') ||
+            text.includes('Приветствие') ||
+            text.includes('Ожидание') ||
+            text.includes('Уточнение дет') ||
+            element.closest('[role="dialog"]') ||
+            element.closest('.modal') ||
+            element.querySelector('.template-');
+
+        if (isTemplateModal) {
+            return false;
+        }
+
         // Проверяем, может ли элемент быть обращением
         const testId = element.getAttribute('data-testid');
         const className = element.className || '';
@@ -238,7 +267,14 @@ class AppealMonitor {
         }
         this.detectionSources.get(appealId).add(source);
 
-        console.log(`🔍 Appeal ${appealId} detected by ${source} (sources: ${Array.from(this.detectionSources.get(appealId)).join(', ')})`);
+        // ИСПРАВЛЕНИЕ: Логируем обнаружения более кратко и только при новых источниках
+        const sources = Array.from(this.detectionSources.get(appealId));
+        if (sources.length === 1) {
+            console.log(`🔍 Appeal ${appealId} detected by ${source}`);
+        } else {
+            // Логируем только если это новый источник для существующего обращения
+            console.log(`🔄 Appeal ${appealId} detected by additional source: ${source}`);
+        }
 
         // Обрабатываем как раньше
         if (!this.appeals.has(appealId)) {
@@ -301,7 +337,7 @@ class AppealMonitor {
             try {
                 const elements = document.querySelectorAll(selector);
                 if (elements.length > 0) {
-                    console.log(`✅ Found ${elements.length} elements with selector: ${selector}`);
+                    // ИСПРАВЛЕНИЕ: Убираем избыточные логи каждого селектора
                     sidebarAppeals.push(...Array.from(elements));
                 }
             } catch (e) {
@@ -556,15 +592,132 @@ class AppealMonitor {
                 info.id = numericMatch[1];
                 console.log('⚠️ Using numeric ID as fallback:', info.id);
             } else {
-                // Только если совсем ничего не найдено, используем имя как основу
-                info.id = info.name?.replace(/\s+/g, '_') || `appeal_${Date.now()}`;
-                console.log('⚠️ No ID found, using name-based ID:', info.id);
+                // ИСПРАВЛЕНИЕ: Используем стабильный ID на основе элемента и контента
+                info.id = this.generateStableId(element, info.name, allText);
+                console.log('⚠️ No ID found, using stable content-based ID:', info.id);
             }
         }
 
         return info;
     }
-    
+
+    // НОВАЯ ФУНКЦИЯ: Генерация стабильного ID на основе контента элемента
+    generateStableId(element, name, allText) {
+        // Сначала проверяем кэш для элемента
+        if (this.elementToIdCache.has(element)) {
+            return this.elementToIdCache.get(element);
+        }
+
+        // Создаем стабильный хэш на основе контента
+        const stableContent = this.extractStableContent(element, name, allText);
+
+        // Проверяем кэш контента
+        if (this.contentToIdCache.has(stableContent)) {
+            const existingId = this.contentToIdCache.get(stableContent);
+            this.elementToIdCache.set(element, existingId);
+            return existingId;
+        }
+
+        // Генерируем новый стабильный ID
+        const stableId = this.generateContentBasedId(stableContent);
+
+        // Сохраняем в кэши
+        this.elementToIdCache.set(element, stableId);
+        this.contentToIdCache.set(stableContent, stableId);
+
+        return stableId;
+    }
+
+    // Извлечение стабильного контента для идентификации
+    extractStableContent(element, name, allText) {
+        // Создаем стабильный отпечаток на основе:
+        // 1. Имени клиента (если есть)
+        // 2. Первых значимых слов текста (игнорируем изменяющиеся части)
+        // 3. Позиции элемента в родителе (относительная)
+
+        const stableParts = [];
+
+        // 1. Имя клиента
+        if (name && name !== 'Unknown') {
+            stableParts.push(`name:${name.replace(/\s+/g, '_').toLowerCase()}`);
+        }
+
+        // 2. Стабильная часть текста (первые значимые слова, игнорируем время/даты)
+        const cleanText = allText
+            .replace(/\d{2}:\d{2}|\d{2}\.\d{2}\.\d{4}|\d+\s*(мин|сек|час)/gi, '') // Убираем время
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        const significantWords = cleanText
+            .split(' ')
+            .filter(word => word.length > 2 && !['Шаблоны', 'ответов', 'Категории'].includes(word))
+            .slice(0, 5)
+            .join('_')
+            .toLowerCase();
+
+        if (significantWords) {
+            stableParts.push(`text:${significantWords}`);
+        }
+
+        // 3. Относительная позиция в родителе (более стабильная чем абсолютная)
+        if (element.parentElement) {
+            const siblings = Array.from(element.parentElement.children);
+            const index = siblings.indexOf(element);
+            if (index >= 0) {
+                stableParts.push(`pos:${index}`);
+            }
+        }
+
+        // Если ничего не найдено, используем базовый счетчик
+        if (stableParts.length === 0) {
+            stableParts.push(`fallback:${this.stableIdCounter++}`);
+        }
+
+        return stableParts.join('|');
+    }
+
+    // Генерация ID на основе контента
+    generateContentBasedId(stableContent) {
+        // Простая хэш-функция для создания короткого стабильного ID
+        let hash = 0;
+        for (let i = 0; i < stableContent.length; i++) {
+            const char = stableContent.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Преобразуем в 32-битное число
+        }
+
+        // Преобразуем в положительное число и добавляем префикс
+        const positiveHash = Math.abs(hash).toString(36);
+        return `stable_${positiveHash}`;
+    }
+
+    // НОВАЯ ФУНКЦИЯ: Проверка throttling для DOM изменений элемента
+    isElementChangeThrottled(element) {
+        const now = Date.now();
+        const THROTTLE_WINDOW = 2000; // 2 секунды между обработками одного элемента
+
+        if (this.domChangeThrottle.has(element)) {
+            const lastProcessed = this.domChangeThrottle.get(element);
+            if (now - lastProcessed < THROTTLE_WINDOW) {
+                return true; // Заблокировано throttling-ом
+            }
+        }
+
+        this.domChangeThrottle.set(element, now);
+
+        // Очистка старых записей throttling (каждые 50 записей)
+        if (this.domChangeThrottle.size > 50) {
+            const cutoffTime = now - THROTTLE_WINDOW * 2;
+            this.domChangeThrottle.forEach((time, elem) => {
+                if (time < cutoffTime) {
+                    this.domChangeThrottle.delete(elem);
+                }
+            });
+        }
+
+        return false;
+    }
+
     // Проверка, является ли обращение новым или активным
     isNewAppeal(element) {
         // Проверяем различные индикаторы нового сообщения
