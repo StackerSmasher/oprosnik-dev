@@ -1150,22 +1150,24 @@ class AppealMonitor {
         };
     }
     
-    // Перехват сетевых запросов
+    // DISABLED: Network interception handled by content.js
+    // This prevents duplicate network monitoring
     interceptNetwork() {
-        console.log('🌐 Starting network interception...');
-        
-        // Перехват fetch
+        console.log('🚫 Network interception disabled - handled by content.js');
+
+        // COMMENTED OUT: This entire method duplicates content.js network monitoring
+        /*
         const originalFetch = window.fetch;
         window.fetch = async (...args) => {
             const [url] = args;
-            
+
             // Проверяем URL на наличие appealId
             if (url && url.includes('appealId=')) {
                 const match = url.match(/appealId=(\d+)/);
                 if (match) {
                     const appealId = match[1];
                     console.log('📡 Network: Found appealId in request:', appealId);
-                    
+
                     if (!this.appeals.has(appealId)) {
                         this.appeals.set(appealId, {
                             id: appealId,
@@ -1173,14 +1175,15 @@ class AppealMonitor {
                             status: 'new',
                             timestamp: Date.now()
                         });
-                        
+
                         console.log('🆕 New appeal from network:', appealId);
                     }
                 }
             }
-            
+
             return originalFetch.apply(window, args);
         };
+        */
     }
     
     // Статистика
@@ -1282,13 +1285,14 @@ class AppealMonitor {
             console.log('❌ AppealMonitor Check is not active');
         }
 
-        // Тест 4: Network Intercept
+        // Тест 4: Network Intercept (handled by content.js)
         console.log('4. Testing Network Intercept...');
-        if (window.fetch && window.fetch.toString().includes('appealId')) {
+        if (window.fetch && window.fetch.toString().includes('omnichat-interceptor')) {
             results.networkIntercept = true;
-            console.log('✅ Network Intercept is active');
+            console.log('✅ Network Intercept is active (content.js)');
         } else {
-            console.log('❌ Network Intercept may not be active');
+            console.log('⚠️ Network Intercept handled by content.js - omniChatAppelMonitor disabled');
+            results.networkIntercept = false;
         }
 
         // Запускаем ручную проверку для тестирования
@@ -1358,10 +1362,11 @@ console.log('\n🛡️ DEDUPLICATION: Active (prevents multiple detections of sa
 
 // КОНТРОЛИРУЕМЫЙ АВТОМАТИЧЕСКИЙ ЗАПУСК
 // Без спама, но с обнаружением
-setTimeout(() => {
-    window.appealMonitor.start();
-    console.log('✅ AppealMonitor started in controlled mode');
-}, 2000);
+// Отключаем автозапуск
+// setTimeout(() => {
+//     window.appealMonitor.start();
+//     console.log('✅ AppealMonitor started in controlled mode');
+// }, 2000);
 
 console.log('\n🚫 Spam protection: Active (controlled processing only)');
 console.log('Manual commands still available: appealMonitor.stop(), appealMonitor.quickSendTemplate()');

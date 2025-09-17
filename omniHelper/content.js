@@ -3,673 +3,14 @@
 
 // ===== ЦЕНТРАЛИЗОВАННЫЙ КООРДИНАТОР ОБНАРУЖЕНИЯ =====
 
-class DetectionCoordinator {
-    constructor() {
-        this.detectionSources = new Map(); // source -> lastDetectionTime
-        this.globalDetectionQueue = new Map(); // appealId -> {sources: Set, firstDetection: timestamp, lastUpdate: timestamp}
-        this.detectionStats = {
-            totalDetections: 0,
-            uniqueAppeals: 0,
-            duplicateDetections: 0,
-            sourceStats: new Map()
-        };
-        this.DEDUPLICATION_WINDOW = 60000; // 60 секунд между обнаружениями одного обращения
-        this.APPEAL_LIFETIME = 300000; // 5 минут - время жизни обращения в системе
-
-        console.log('🎯 DetectionCoordinator initialized');
-    }
-
-    // Регистрация обнаружения обращения из любого источника
-    registerDetection(appealId, source, element = null, additionalData = {}) {
-        const now = Date.now();
-        const detection = {
-            appealId,
-            source,
-            element,
-            timestamp: now,
-            ...additionalData
-        };
-
-        // Обновляем статистику источника
-        if (!this.detectionStats.sourceStats.has(source)) {
-            this.detectionStats.sourceStats.set(source, { count: 0, lastDetection: null });
-        }
-        const sourceStats = this.detectionStats.sourceStats.get(source);
-        sourceStats.count++;
-        sourceStats.lastDetection = now;
-
-        // Проверяем дедупликацию
-        if (this.isDuplicateDetection(appealId, source, now)) {
-            console.log(`⏭️ Duplicate detection filtered: ${appealId} from ${source}`);
-            this.detectionStats.duplicateDetections++;
-            return false; // Отклоняем дубликат
-        }
-
-        // Регистрируем обнаружение
-        if (!this.globalDetectionQueue.has(appealId)) {
-            this.globalDetectionQueue.set(appealId, {
-                sources: new Set([source]),
-                firstDetection: now,
-                lastUpdate: now,
-                element: element,
-                data: additionalData
-            });
-            this.detectionStats.uniqueAppeals++;
-            console.log(`🆕 New appeal registered: ${appealId} (source: ${source})`);
-        } else {
-            const existing = this.globalDetectionQueue.get(appealId);
-            existing.sources.add(source);
-            existing.lastUpdate = now;
-            if (element && !existing.element) {
-                existing.element = element; // Обновляем элемент если его не было
-            }
-            console.log(`🔄 Appeal updated: ${appealId} (sources: ${Array.from(existing.sources).join(', ')})`);
-        }
-
-        this.detectionStats.totalDetections++;
-        return true; // Принимаем обнаружение
-    }
-
-    // Проверка на дубликат
-    isDuplicateDetection(appealId, source, currentTime) {
-        const cacheKey = `${appealId}_${source}`;
-
-        if (this.detectionSources.has(cacheKey)) {
-            const lastTime = this.detectionSources.get(cacheKey);
-            if (currentTime - lastTime < this.DEDUPLICATION_WINDOW) {
-                return true; // Дубликат
-            }
-        }
-
-        this.detectionSources.set(cacheKey, currentTime);
-        return false;
-    }
-
-    // Получение всех уникальных обращений для обработки
-    getUniqueAppealsForProcessing() {
-        const now = Date.now();
-        const validAppeals = [];
-
-        this.globalDetectionQueue.forEach((detection, appealId) => {
-            // Удаляем устаревшие обращения
-            if (now - detection.firstDetection > this.APPEAL_LIFETIME) {
-                this.globalDetectionQueue.delete(appealId);
-                console.log(`🗑️ Expired appeal removed: ${appealId}`);
-                return;
-            }
-
-            validAppeals.push({
-                appealId,
-                sources: Array.from(detection.sources),
-                element: detection.element,
-                firstDetection: detection.firstDetection,
-                lastUpdate: detection.lastUpdate,
-                data: detection.data
-            });
-        });
-
-        return validAppeals;
-    }
-
-    // Статистика обнаружений
-    getDetectionStats() {
-        const stats = {
-            ...this.detectionStats,
-            activeAppeals: this.globalDetectionQueue.size,
-            sourcesActive: this.detectionStats.sourceStats.size,
-            deduplicationRate: this.detectionStats.totalDetections > 0
-                ? Math.round((this.detectionStats.duplicateDetections / this.detectionStats.totalDetections) * 100)
-                : 0
-        };
-
-        return stats;
-    }
-
-    // Очистка устаревших данных
-    cleanup() {
-        const now = Date.now();
-        let cleanedCount = 0;
-
-        // Очищаем устаревшие обращения
-        this.globalDetectionQueue.forEach((detection, appealId) => {
-            if (now - detection.firstDetection > this.APPEAL_LIFETIME) {
-                this.globalDetectionQueue.delete(appealId);
-                cleanedCount++;
-            }
-        });
-
-        // Очищаем старые записи дедупликации
-        this.detectionSources.forEach((timestamp, key) => {
-            if (now - timestamp > this.APPEAL_LIFETIME) {
-                this.detectionSources.delete(key);
-            }
-        });
-
-        if (cleanedCount > 0) {
-            console.log(`🧹 DetectionCoordinator cleaned ${cleanedCount} expired appeals`);
-        }
-
-        return cleanedCount;
-    }
-
-    // Диагностика координатора
-    diagnose() {
-        console.log('\n🎯 DETECTION COORDINATOR DIAGNOSIS');
-        console.log('='.repeat(40));
-
-        const stats = this.getDetectionStats();
-
-        console.log('📊 Detection Statistics:');
-        console.log(`  Total detections: ${stats.totalDetections}`);
-        console.log(`  Unique appeals: ${stats.uniqueAppeals}`);
-        console.log(`  Duplicate detections: ${stats.duplicateDetections}`);
-        console.log(`  Deduplication rate: ${stats.deduplicationRate}%`);
-        console.log(`  Active appeals: ${stats.activeAppeals}`);
-
-        console.log('\n📡 Detection Sources:');
-        this.detectionStats.sourceStats.forEach((sourceStats, source) => {
-            const lastDetection = sourceStats.lastDetection
-                ? new Date(sourceStats.lastDetection).toLocaleTimeString()
-                : 'Never';
-            console.log(`  ${source}: ${sourceStats.count} detections (last: ${lastDetection})`);
-        });
-
-        console.log('\n🔍 Active Appeals:');
-        this.globalDetectionQueue.forEach((detection, appealId) => {
-            const age = Math.round((Date.now() - detection.firstDetection) / 1000);
-            console.log(`  ${appealId}: sources [${Array.from(detection.sources).join(', ')}] (${age}s ago)`);
-        });
-
-        return stats;
-    }
-}
+// DetectionCoordinator removed - functionality replaced by existing deduplication in omniAnalyzer
 
 // ===== УЛУЧШЕННЫЙ МЕХАНИЗМ ИДЕНТИФИКАЦИИ ОБРАЩЕНИЙ =====
 
-class AppealIdentificationSystem {
-    constructor() {
-        // Карта для хранения fingerprint -> appealId
-        this.fingerprintMap = new Map();
-        // Карта обработанных DOM элементов
-        this.processedElements = new WeakSet();
-        // Счетчик для генерации временных ID
-        this.tempIdCounter = 0;
-        // НОВОЕ: Кэш fingerprint для элементов (предотвращает пересчет)
-        this.elementFingerprintCache = new WeakMap();
-    }
-
-    /**
-     * Создает уникальный fingerprint для обращения
-     * ИСПРАВЛЕНО: Убрана временная зависимость, добавлено кэширование
-     */
-    createAppealFingerprint(element) {
-        // Проверяем кэш - если fingerprint уже создан для этого элемента, используем его
-        if (this.elementFingerprintCache.has(element)) {
-            const cachedFingerprint = this.elementFingerprintCache.get(element);
-            console.log('🔑 Using cached fingerprint:', cachedFingerprint);
-            return cachedFingerprint;
-        }
-
-        const components = [];
-
-        // ПОЛНОСТЬЮ ПЕРЕРАБОТАННАЯ СИСТЕМА FINGERPRINT
-        // Используем только стабильные, контент-основанные характеристики
-
-        // 1. СТАБИЛЬНО: Имя клиента (основной идентификатор)
-        const nameElement = element.querySelector('.sc-hSWyVn.jLoqEI, [title]');
-        const clientName = nameElement?.textContent?.trim() ||
-                          nameElement?.getAttribute('title') ||
-                          'unknown';
-        components.push(`name:${clientName}`);
-
-        // 2. СТАБИЛЬНО: Текст последнего сообщения (не изменяется после отправки)
-        const messageElement = element.querySelector('.sc-mYtaj.hfzSXm, [data-testid="collapsable-text"]');
-        const messageText = messageElement?.textContent?.trim() || '';
-
-        // Используем хеш первых и последних 20 символов для стабильности
-        const msgStart = messageText.substring(0, 20);
-        const msgEnd = messageText.length > 40 ? messageText.substring(messageText.length - 20) : '';
-        const msgFingerprint = msgStart + (msgEnd ? '...' + msgEnd : '');
-        components.push(`msg:${msgFingerprint}`);
-
-        // 3. СТАБИЛЬНО: Data-атрибуты (если есть)
-        const dataAttrs = [];
-        if (element.dataset.appealId) dataAttrs.push(`appeal:${element.dataset.appealId}`);
-        if (element.dataset.testid) dataAttrs.push(`testid:${element.dataset.testid}`);
-        if (element.id) dataAttrs.push(`id:${element.id}`);
-        if (dataAttrs.length > 0) {
-            components.push(`attrs:${dataAttrs.join('|')}`);
-        }
-
-        // 4. УСЛОВНО СТАБИЛЬНО: Время сообщения (если есть)
-        const timeElement = element.querySelector('[class*="time"], .timestamp, [data-time]');
-        if (timeElement) {
-            const timeText = timeElement.textContent?.trim() || timeElement.getAttribute('data-time') || '';
-            // Используем только стабильные части времени (дата, час)
-            const timeMatch = timeText.match(/(\d{1,2}:\d{2}|\d{1,2}\.\d{2}|\d{4}-\d{2}-\d{2})/);
-            if (timeMatch) {
-                components.push(`time:${timeMatch[1]}`);
-            }
-        }
-
-        // 5. СТАБИЛЬНО: Хеш всего текстового контента (без изменчивых элементов)
-        const allText = element.textContent || '';
-        // Убираем изменчивые части: таймеры, статусы
-        const cleanText = allText
-            .replace(/\d+\s*сек/gi, '') // Убираем таймеры
-            .replace(/\d+\s*с\b/gi, '') // Убираем короткие таймеры
-            .replace(/новое|new|unread/gi, '') // Убираем статусы
-            .replace(/\s+/g, ' ') // Нормализуем пробелы
-            .trim();
-
-        if (cleanText.length > 10) {
-            // Создаем стабильный хеш контента
-            const contentHash = this.hashString(cleanText).substring(0, 8);
-            components.push(`content:${contentHash}`);
-        }
-
-        // Создаем хеш из компонентов
-        const fingerprint = this.hashString(components.join('|'));
-
-        console.log('🔑 STABLE content-based fingerprint created:', {
-            fingerprint: fingerprint,
-            components: components,
-            stability: 'HIGH - based on content, not DOM position'
-        });
-
-        // Кэшируем fingerprint для этого элемента
-        this.elementFingerprintCache.set(element, fingerprint);
-
-        return fingerprint;
-    }
-
-    /**
-     * Простая хеш-функция для создания короткого ID
-     */
-    hashString(str) {
-        let hash = 0;
-        for (let i = 0; i < str.length; i++) {
-            const char = str.charCodeAt(i);
-            hash = ((hash << 5) - hash) + char;
-            hash = hash & hash; // Convert to 32bit integer
-        }
-        return Math.abs(hash).toString(36);
-    }
-
-    /**
-     * Извлекает или генерирует уникальный ID для обращения
-     */
-    extractOrGenerateAppealId(element) {
-        // Шаг 1: Проверяем, не обработан ли уже этот элемент
-        if (this.processedElements.has(element)) {
-            console.log('⏭️ Element already processed (WeakSet check)');
-            return null;
-        }
-
-        // Шаг 2: Проверяем data-атрибут маркера обработки
-        if (element.dataset.omniProcessed === 'true') {
-            console.log('⏭️ Element already processed (data attribute check)');
-            return null;
-        }
-
-        // Шаг 3: Пытаемся найти реальный номер обращения
-        const realAppealId = this.findRealAppealId(element);
-
-        if (realAppealId) {
-            console.log('✅ Found real appeal ID:', realAppealId);
-            return realAppealId;
-        }
-
-        // Шаг 4: Создаем fingerprint для элемента
-        const fingerprint = this.createAppealFingerprint(element);
-
-        // Шаг 5: Проверяем, есть ли уже ID для этого fingerprint
-        if (this.fingerprintMap.has(fingerprint)) {
-            const existingId = this.fingerprintMap.get(fingerprint);
-            console.log('📋 Using existing ID for fingerprint:', existingId);
-            return existingId;
-        }
-
-        // ИСПРАВЛЕНИЕ: Пытаемся получить stable ID от AppealMonitor
-        if (window.appealMonitor) {
-            const appealInfo = window.appealMonitor.extractAppealInfo(element);
-            if (appealInfo && appealInfo.id && appealInfo.id.startsWith('stable_')) {
-                this.fingerprintMap.set(fingerprint, appealInfo.id);
-                console.log('🔗 Using stable ID from AppealMonitor:', appealInfo.id);
-                return appealInfo.id;
-            }
-        }
-
-        // Шаг 6: Генерируем новый временный ID только если нет stable ID
-        const tempId = `TEMP_${Date.now()}_${++this.tempIdCounter}_${fingerprint}`;
-        this.fingerprintMap.set(fingerprint, tempId);
-
-        console.log('🆕 Generated temporary ID:', tempId);
-        return tempId;
-    }
-
-    /**
-     * Ищет реальный номер обращения в элементе
-     */
-    findRealAppealId(element) {
-        const text = element.textContent || '';
-
-        // Паттерны для поиска реальных номеров обращений
-        const patterns = [
-            /Обращение\s*№\s*(\d{5,})/i,     // "Обращение № 123456" (минимум 5 цифр)
-            /Обращение[:\s#]+(\d{5,})/i,     // "Обращение: 123456"
-            /Appeal[:\s#№]+(\d{5,})/i,       // "Appeal: 123456"
-            /#(\d{6,})/,                      // "#123456" (минимум 6 цифр для уверенности)
-            /ID[:\s]+(\d{5,})/i,              // "ID: 123456"
-            /№\s*(\d{6,})/                   // "№ 123456" (минимум 6 цифр)
-        ];
-
-        for (const pattern of patterns) {
-            const match = text.match(pattern);
-            if (match) {
-                return match[1];
-            }
-        }
-
-        // Проверяем data-атрибуты
-        const dataAppealId = element.dataset?.appealId ||
-                           element.dataset?.appealid ||
-                           element.getAttribute('data-appeal-id');
-
-        // Возвращаем только если это похоже на реальный ID (числовой и достаточно длинный)
-        if (dataAppealId && /^\d{5,}$/.test(dataAppealId)) {
-            return dataAppealId;
-        }
-
-        return null;
-    }
-
-    /**
-     * Помечает элемент как обработанный
-     */
-    markAsProcessed(element, appealId) {
-        // Добавляем в WeakSet
-        this.processedElements.add(element);
-
-        // Добавляем data-атрибут для персистентности
-        element.dataset.omniProcessed = 'true';
-        element.dataset.omniProcessedId = appealId;
-        element.dataset.omniProcessedTime = Date.now();
-
-        // Визуальная индикация (можно убрать в продакшене)
-        element.style.opacity = '0.7';
-
-        console.log('✅ Element marked as processed:', appealId);
-    }
-
-    /**
-     * Проверяет, является ли обращение новым (не обработанным)
-     */
-    isNewUnprocessedAppeal(element) {
-        // 1. Проверяем маркеры обработки
-        if (this.processedElements.has(element) ||
-            element.dataset.omniProcessed === 'true') {
-            return false;
-        }
-
-        // 2. НОВОЕ: Проверяем, не активное ли это обращение
-        const appealId = this.extractOrGenerateAppealId(element);
-        if (appealId && window.omniAnalyzer?.isCurrentlyActiveAppeal?.(appealId)) {
-            console.log('🚫 Appeal is currently active, not new:', appealId);
-            return false;
-        }
-
-        // 2.5. ИСПРАВЛЕНО: Дополнительная проверка через GreetingTracker
-        if (appealId && window.omniAnalyzer?.greetingTracker?.wasGreeted?.(element, appealId)) {
-            console.log('🚫 Appeal already greeted, not new:', appealId);
-            return false;
-        }
-
-        // 3. ИСПРАВЛЕНО: Проверяем таймер только в сочетании с другими признаками
-        const timerCheck = this.checkTimer(element);
-
-        // Таймер НЕ является самостоятельным признаком новизны
-        // Он должен сочетаться с другими индикаторами
-        let hasTimerWithIndicators = false;
-
-        if (timerCheck.hasTimer && timerCheck.seconds < 30) {
-            // Проверяем наличие дополнительных признаков новизны
-            const hasBadge = !!element.querySelector('[data-testid="badge"], [data-testid="dot"], .new');
-            const hasUnreadClass = element.classList.contains('unread') ||
-                                  element.classList.contains('new') ||
-                                  element.classList.contains('pending');
-
-            // ВАЖНО: таймер считается только если есть другие признаки
-            // И только если элемент НЕ был уже обработан в течение последних 24 часов
-            const processedTime = parseInt(element.dataset.omniProcessedTime || '0');
-            const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
-            const wasRecentlyProcessed = processedTime > oneDayAgo;
-
-            if ((hasBadge || hasUnreadClass) && !wasRecentlyProcessed) {
-                console.log('🔥 New appeal with timer AND other indicators:', timerCheck.seconds, 'seconds');
-                hasTimerWithIndicators = true;
-            } else if (wasRecentlyProcessed) {
-                console.log('⏭️ Timer found but appeal was recently processed, ignoring');
-                return false;
-            } else {
-                console.log('⏰ Timer found but no other new indicators - not marking as new:', timerCheck.seconds, 'seconds');
-            }
-        }
-
-        // 4. Проверяем другие индикаторы новизны
-        const hasNewIndicators = this.checkNewIndicators(element);
-
-        // ИСПРАВЛЕНО: Объединяем все проверки правильно
-        const isNew = hasTimerWithIndicators || hasNewIndicators;
-
-        if (isNew) {
-            console.log('✅ Appeal marked as new:', {
-                hasTimerWithIndicators,
-                hasNewIndicators,
-                timerSeconds: timerCheck.seconds
-            });
-        }
-
-        return isNew;
-    }
-
-    /**
-     * Проверяет наличие таймера в элементе
-     */
-    checkTimer(element) {
-        const result = { hasTimer: false, seconds: null };
-
-        // Ищем таймер в специфической структуре
-        const timerContainer = element.querySelector('.sc-cewOZc.ioQCCB span, [class*="timer"]');
-
-        if (timerContainer) {
-            const timerText = timerContainer.textContent || '';
-            const timerMatch = timerText.match(/(\d+)\s*сек/i);
-            if (timerMatch) {
-                result.hasTimer = true;
-                result.seconds = parseInt(timerMatch[1]);
-            }
-        }
-
-        // Резервный поиск в тексте
-        if (!result.hasTimer) {
-            const text = element.textContent || '';
-            const timerMatch = text.match(/(\d+)\s*сек/i);
-            if (timerMatch) {
-                const seconds = parseInt(timerMatch[1]);
-                // Проверяем, что это реально таймер (не больше 1000 секунд)
-                if (seconds <= 1000) {
-                    result.hasTimer = true;
-                    result.seconds = seconds;
-                }
-            }
-        }
-
-        return result;
-    }
-
-    /**
-     * Проверяет другие индикаторы нового обращения
-     */
-    checkNewIndicators(element) {
-        // Проверяем наличие badge/dot
-        const hasBadge = !!element.querySelector('[data-testid="badge"], [data-testid="dot"], .badge, .new');
-
-        // Проверяем классы
-        const classList = element.className || '';
-        const hasNewClass = classList.includes('unread') ||
-                           classList.includes('new') ||
-                           classList.includes('pending');
-
-        // Проверяем стиль (жирный текст)
-        const fontWeight = window.getComputedStyle(element).fontWeight;
-        const isBold = fontWeight === 'bold' || parseInt(fontWeight) >= 600;
-
-        return hasBadge || hasNewClass || isBold;
-    }
-
-    /**
-     * Очищает старые fingerprints (старше 24 часов)
-     */
-    cleanupOldFingerprints() {
-        const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
-
-        // Очищаем data-атрибуты у старых элементов
-        document.querySelectorAll('[data-omni-processed="true"]').forEach(element => {
-            const processedTime = parseInt(element.dataset.omniProcessedTime || '0');
-            if (processedTime < oneDayAgo) {
-                delete element.dataset.omniProcessed;
-                delete element.dataset.omniProcessedId;
-                delete element.dataset.omniProcessedTime;
-                element.style.opacity = '';
-
-                // НОВОЕ: Очищаем кэш fingerprint для старых элементов
-                if (this.elementFingerprintCache.has(element)) {
-                    this.elementFingerprintCache.delete(element);
-                }
-            }
-        });
-
-        // Очищаем fingerprint map (ограничиваем размер)
-        if (this.fingerprintMap.size > 100) {
-            const entriesToKeep = 50;
-            const entries = Array.from(this.fingerprintMap.entries());
-            this.fingerprintMap.clear();
-            entries.slice(-entriesToKeep).forEach(([key, value]) => {
-                this.fingerprintMap.set(key, value);
-            });
-        }
-
-        console.log('🧹 Cleanup completed (including fingerprint cache)');
-    }
-
-    /**
-     * НОВЫЙ МЕТОД: Принудительное обновление fingerprint для элемента
-     * Используется когда элемент значительно изменился
-     */
-    invalidateFingerprintCache(element) {
-        if (this.elementFingerprintCache.has(element)) {
-            this.elementFingerprintCache.delete(element);
-            console.log('🔄 Fingerprint cache invalidated for element');
-        }
-    }
-
-    /**
-     * НОВЫЙ МЕТОД: Тестирование стабильности fingerprint
-     * Проверяет, что fingerprint не изменяется при DOM манипуляциях
-     */
-    testFingerprintStability(element) {
-        console.log('🧪 Testing fingerprint stability...');
-
-        // Получаем исходный fingerprint
-        const originalFingerprint = this.createAppealFingerprint(element);
-        console.log('📍 Original fingerprint:', originalFingerprint);
-
-        const results = {
-            originalFingerprint,
-            tests: [],
-            stable: true
-        };
-
-        // Тест 1: Добавление элемента в DOM (изменение позиции)
-        const testDiv = document.createElement('div');
-        testDiv.textContent = 'Test element';
-        element.parentElement?.insertBefore(testDiv, element);
-
-        this.invalidateFingerprintCache(element);
-        const afterPositionChange = this.createAppealFingerprint(element);
-        const positionTest = originalFingerprint === afterPositionChange;
-        results.tests.push({
-            name: 'Position change resistance',
-            passed: positionTest,
-            fingerprint: afterPositionChange
-        });
-
-        if (!positionTest) results.stable = false;
-
-        // Тест 2: Изменение размера родительского элемента
-        const originalWidth = element.parentElement?.style.width || '';
-        if (element.parentElement) {
-            element.parentElement.style.width = '1000px';
-        }
-
-        this.invalidateFingerprintCache(element);
-        const afterResize = this.createAppealFingerprint(element);
-        const resizeTest = originalFingerprint === afterResize;
-        results.tests.push({
-            name: 'Resize resistance',
-            passed: resizeTest,
-            fingerprint: afterResize
-        });
-
-        if (!resizeTest) results.stable = false;
-
-        // Тест 3: Добавление CSS классов
-        const originalClass = element.className;
-        element.className += ' test-class added-class';
-
-        this.invalidateFingerprintCache(element);
-        const afterClassChange = this.createAppealFingerprint(element);
-        const classTest = originalFingerprint === afterClassChange;
-        results.tests.push({
-            name: 'CSS class change resistance',
-            passed: classTest,
-            fingerprint: afterClassChange
-        });
-
-        if (!classTest) results.stable = false;
-
-        // Восстанавливаем исходное состояние
-        testDiv.remove();
-        if (element.parentElement) {
-            element.parentElement.style.width = originalWidth;
-        }
-        element.className = originalClass;
-
-        // Финальная проверка
-        this.invalidateFingerprintCache(element);
-        const finalFingerprint = this.createAppealFingerprint(element);
-        const finalTest = originalFingerprint === finalFingerprint;
-        results.tests.push({
-            name: 'Recovery test',
-            passed: finalTest,
-            fingerprint: finalFingerprint
-        });
-
-        console.log('📊 Fingerprint stability test results:');
-        results.tests.forEach(test => {
-            console.log(`  ${test.passed ? '✅' : '❌'} ${test.name}`);
-            if (!test.passed) {
-                console.log(`    Expected: ${originalFingerprint}`);
-                console.log(`    Got: ${test.fingerprint}`);
-            }
-        });
-
-        console.log(`🎯 Overall stability: ${results.stable ? 'STABLE' : 'UNSTABLE'}`);
-
-        return results;
-    }
-}
+// AppealIdentificationSystem removed - functionality replaced by:
+// - unifiedCoordinator.js for ID normalization and deduplication
+// - simplifiedHandler.js for appeal detection and processing
+// This eliminates complex fingerprinting and unstable temporary IDs
 
 class OmniChatTrafficAnalyzer {
     constructor() {
@@ -685,8 +26,7 @@ class OmniChatTrafficAnalyzer {
         this.processedAppeals = new Set(); // Track processed appeals
         this.processedTimestamps = new Map(); // Track when appeals were processed
         
-        // НОВОЕ: Централизованный координатор обнаружения
-        this.detectionCoordinator = new DetectionCoordinator();
+        // Deduplication handled by existing processedAppeals system
 
         // Новые счетчики для предотвращения дублирования
         this.sessionProcessedCount = 0; // Количество обработанных в текущей сессии
@@ -713,8 +53,39 @@ class OmniChatTrafficAnalyzer {
             checkDelay: 2000 // 2 seconds delay for batching
         };
 
-        // Initialize the new appeal identification system
-        this.appealIdSystem = new AppealIdentificationSystem();
+        // Simple appeal ID extraction helpers (replaces complex AppealIdentificationSystem)
+        this.simpleExtractAppealId = (element) => {
+            // Try to find real appeal numbers first
+            const text = element.textContent || '';
+            const patterns = [
+                /Обращение\s*№\s*(\d{5,})/i,
+                /Обращение[:\s#]+(\d{5,})/i,
+                /Appeal[:\s#№]+(\d{5,})/i,
+                /#(\d{5,})/,
+                /ID[:\s]+(\d{5,})/i,
+                /№\s*(\d{5,})/
+            ];
+
+            for (const pattern of patterns) {
+                const match = text.match(pattern);
+                if (match) return match[1];
+            }
+
+            // Check data attributes
+            return element.dataset?.appealId ||
+                   element.dataset?.appealid ||
+                   element.getAttribute('data-appeal-id') ||
+                   null;
+        };
+
+        this.isNewAppeal = (element) => {
+            // Simple check for new appeal indicators
+            const hasBadge = !!element.querySelector('[data-testid="badge"], [data-testid="dot"], .badge, .new');
+            const hasTimer = /\d+\s*сек/i.test(element.textContent || '');
+            const hasNewClass = element.className.includes('unread') || element.className.includes('new');
+
+            return hasBadge || (hasTimer && parseInt((element.textContent.match(/(\d+)\s*сек/i) || [])[1]) < 30) || hasNewClass;
+        };
 
         // Отслеживание приветствий в сессии
         this.greetedAppeals = new Map(); // appealId -> timestamp
@@ -760,10 +131,10 @@ class OmniChatTrafficAnalyzer {
             }
         });
 
-        // Start periodic cleanup
-        setInterval(() => {
-            this.appealIdSystem.cleanupOldFingerprints();
-        }, 30 * 60 * 1000); // Every 30 minutes
+        // DISABLED: Cleanup handled by unifiedCoordinator.js
+        // setInterval(() => {
+        //     // Cleanup handled by unifiedCoordinator
+        // }, 30 * 60 * 1000);
 
         this.init();
     }
@@ -776,9 +147,9 @@ class OmniChatTrafficAnalyzer {
         this.injectMainWorldScript();
         this.setupMessageListener();
         this.setupDOMObserver();
-        this.setupAppealDetection();
+        // this.setupAppealDetection();
         this.startPeriodicSync();
-        this.startPeriodicAppealCheck(); // Новая периодическая проверка
+        // this.startPeriodicAppealCheck(); // Новая периодическая проверка
         this.startPeriodicCleanup(); // Периодическая очистка старых данных
         this.exposeDebugInterface();
     }
@@ -790,8 +161,8 @@ class OmniChatTrafficAnalyzer {
         // Monitor for new appeal elements in the UI
         this.observeAppealList();
         
-        // Check for existing appeals on page load
-        setTimeout(() => this.checkForExistingAppeals(), 2000);
+        // DISABLED: Initial check now handled by simplifiedHandler.js
+        // setTimeout(() => this.checkForExistingAppeals(), 2000);
     }
 
     observeAppealList() {
@@ -911,7 +282,7 @@ class OmniChatTrafficAnalyzer {
         if (!appealElement) return;
 
         // Step 2: Use the new appeal identification system
-        const appealId = this.appealIdSystem.extractOrGenerateAppealId(appealElement);
+        const appealId = this.simpleExtractAppealId(appealElement);
 
         if (!appealId) {
             console.log('⏭️ Element already processed or invalid');
@@ -921,13 +292,13 @@ class OmniChatTrafficAnalyzer {
         // НОВАЯ ПРОВЕРКА: Не является ли это текущим активным обращением
         if (this.isCurrentlyActiveAppeal(appealId)) {
             console.log('⏭️ Appeal is currently active, skipping:', appealId);
-            this.appealIdSystem.markAsProcessed(appealElement, appealId);
+            // Processing tracking handled by unifiedCoordinator
             return;
         }
 
         // Step 3: Check if this is a new unprocessed appeal
-        if (!this.appealIdSystem.isNewUnprocessedAppeal(appealElement)) {
-            console.log('⏭️ Appeal not new or already processed:', appealId);
+        if (!this.isNewAppeal(appealElement)) {
+            console.log('⏭️ Appeal not new:', appealId);
             return;
         }
 
@@ -940,7 +311,7 @@ class OmniChatTrafficAnalyzer {
         // НОВАЯ ПРОВЕРКА: GreetingTracker
         if (this.greetingTracker && this.greetingTracker.wasGreeted(element, appealId)) {
             console.log('⏭️ Appeal already greeted (GreetingTracker):', appealId);
-            this.appealIdSystem.markAsProcessed(appealElement, appealId);
+            // Processing tracking handled by unifiedCoordinator
             return;
         }
 
@@ -965,24 +336,9 @@ class OmniChatTrafficAnalyzer {
         console.log('    - Auto-response enabled:', this.autoResponseEnabled);
 
         // Step 6: Mark element as processed immediately
-        this.appealIdSystem.markAsProcessed(appealElement, appealId);
+        // Processing tracking handled by unifiedCoordinator
 
-        // НОВОЕ: Регистрируем в DetectionCoordinator
-        const registered = this.detectionCoordinator.registerDetection(
-            appealId,
-            'dom-mutation',
-            appealElement,
-            {
-                automatic: true,
-                fromMutation: true,
-                type: 'greeting'
-            }
-        );
-
-        if (!registered) {
-            console.log('⏭️ Appeal filtered by DetectionCoordinator:', appealId);
-            return;
-        }
+        // Already handled by main deduplication system
 
         // Step 7: Add to queue if auto-response is enabled
         if (this.autoResponseEnabled) {
@@ -1107,197 +463,11 @@ class OmniChatTrafficAnalyzer {
     }
 
     checkForExistingAppeals(source = 'manual') {
-        console.log(`🔍 Checking for existing appeals (source: ${source})...`);
-        // ИСПРАВЛЕНО: Добавлены проверки GreetingTracker во всех методах сканирования
-        // НОВОЕ: Интеграция с DetectionCoordinator
-
-        let appeals = [];
-        
-        // Метод 1: Использование AppealMonitor (если доступен)
-        if (window.appealMonitor && window.appealMonitor.isMonitoring) {
-            console.log('🔍 Using AppealMonitor data...');
-            
-            try {
-                const sidebarAppeals = window.appealMonitor.getSidebarAppeals();
-                console.log(`📊 AppealMonitor found ${sidebarAppeals.length} sidebar appeals`);
-                
-                sidebarAppeals.forEach(appealInfo => {
-                    if (appealInfo.status === 'new' &&
-                        appealInfo.id &&
-                        this.isAppealEligibleForProcessing(appealInfo.id)) {
-
-                        // ИСПРАВЛЕНО: Добавлена проверка GreetingTracker
-                        if (this.greetingTracker && appealInfo.element &&
-                            this.greetingTracker.wasGreeted(appealInfo.element, appealInfo.id)) {
-                            console.log('⏭️ Appeal already greeted (GreetingTracker in checkForExistingAppeals):', appealInfo.id);
-                            return; // Пропускаем уже поприветствованное обращение
-                        }
-
-                        console.log('✅ AppealMonitor appeal eligible:', appealInfo.id);
-
-                        // НОВОЕ: Регистрируем в DetectionCoordinator
-                        const registered = this.detectionCoordinator.registerDetection(
-                            appealInfo.id,
-                            `appealMonitor-${source}`,
-                            appealInfo.element,
-                            {
-                                name: appealInfo.name,
-                                text: appealInfo.text,
-                                status: appealInfo.status
-                            }
-                        );
-
-                        if (registered) {
-                            appeals.push({
-                                appealId: appealInfo.id,
-                                element: appealInfo.element,
-                                source: 'appealMonitor',
-                                name: appealInfo.name,
-                                text: appealInfo.text
-                            });
-                        }
-                    }
-                });
-            } catch (error) {
-                console.log('⚠️ Error getting AppealMonitor data:', error.message);
-            }
-        }
-        
-        // Метод 2: Собственное сканирование (дополнительно)
-        console.log('🔍 Performing built-in appeal scan...');
-        
-        const appealSelectors = [
-            '[data-testid="appeal-preview"]',  // Основной селектор для OmniChat
-            '[data-appeal-id]',
-            '.appeal-item',
-            '.chat-item:not(.read)',
-            '.chat-item', // Добавляем все чаты, не только непрочитанные
-            '.dialog-item.unread',
-            '.dialog-item', // Добавляем все диалоги
-            '.conversation-item.new',
-            '.conversation-item', // Добавляем все разговоры
-            // Дополнительные селекторы для общих чатов
-            '[class*="chat"]',
-            '[class*="dialog"]',
-            '[class*="conversation"]',
-            '[class*="appeal"]'
-        ];
-
-        for (const selector of appealSelectors) {
-            const elements = document.querySelectorAll(selector);
-            elements.forEach(el => {
-                const appealId = this.extractAppealIdFromElement(el);
-                if (appealId && this.isAppealEligibleForProcessing(appealId)) {
-                    // Проверяем, нет ли уже в списке
-                    const alreadyFound = appeals.some(a => a.appealId === appealId);
-
-                    // ИСПРАВЛЕНО: Добавлена проверка GreetingTracker для собственного сканирования
-                    if (this.greetingTracker && this.greetingTracker.wasGreeted(el, appealId)) {
-                        console.log('⏭️ Appeal already greeted (GreetingTracker in built-in scan):', appealId);
-                        return; // Пропускаем уже поприветствованное обращение
-                    }
-
-                    // Смягчаем проверку - добавляем все обращения, не только очевидно новые
-                    if (!alreadyFound) {
-                        const isNew = this.isNewAppeal(el);
-                        console.log(`🔍 Built-in scan found appeal: ${appealId} (new: ${isNew})`);
-
-                        // НОВОЕ: Регистрируем в DetectionCoordinator
-                        const registered = this.detectionCoordinator.registerDetection(
-                            appealId,
-                            `builtInScan-${source}`,
-                            el,
-                            {
-                                isNewByIndicators: isNew,
-                                selector: selector
-                            }
-                        );
-
-                        if (registered) {
-                            appeals.push({
-                                appealId: appealId,
-                                element: el,
-                                source: 'builtInScan',
-                                isNewByIndicators: isNew
-                            });
-                        }
-                    }
-                }
-            });
-        }
-
-        // Дополнительный скан для общих элементов чатов
-        if (appeals.length === 0) {
-            console.log('🔍 No appeals found by standard selectors, trying broader search...');
-            const broadSelectors = [
-                'div[class*="sc-"]', // Общие styled-components классы
-                'div[data-testid]',  // Любые элементы с data-testid
-                'li', // Элементы списков
-                'article' // Общие контентные элементы
-            ];
-
-            for (const selector of broadSelectors) {
-                const elements = document.querySelectorAll(selector);
-                for (const el of elements) {
-                    const appealId = this.extractAppealIdFromElement(el);
-                    if (appealId && !appeals.some(a => a.appealId === appealId) && this.isAppealEligibleForProcessing(appealId)) {
-                        // ИСПРАВЛЕНО: Добавлена проверка GreetingTracker для расширенного поиска
-                        if (this.greetingTracker && this.greetingTracker.wasGreeted(el, appealId)) {
-                            console.log('⏭️ Appeal already greeted (GreetingTracker in broad search):', appealId);
-                            continue; // Пропускаем уже поприветствованное обращение
-                        }
-
-                        console.log(`🔎 Broad search found potential appeal: ${appealId}`);
-
-                        // НОВОЕ: Регистрируем в DetectionCoordinator
-                        const registered = this.detectionCoordinator.registerDetection(
-                            appealId,
-                            `broadSearch-${source}`,
-                            el,
-                            {
-                                isNewByIndicators: false,
-                                selector: selector
-                            }
-                        );
-
-                        if (registered) {
-                            appeals.push({
-                                appealId: appealId,
-                                element: el,
-                                source: 'broadSearch',
-                                isNewByIndicators: false
-                            });
-                        }
-                        if (appeals.length >= 10) break; // Ограничиваем количество
-                    }
-                }
-                if (appeals.length > 0) break;
-            }
-        }
-
-        console.log(`📊 Total found ${appeals.length} unprocessed appeals`);
-
-        // Логируем подробности
-        appeals.forEach((appeal, index) => {
-            const newFlag = appeal.isNewByIndicators ? ' [NEW]' : '';
-            console.log(`  ${index + 1}. ${appeal.appealId} (${appeal.source})${newFlag} ${appeal.name ? '- ' + appeal.name : ''}`);
-        });
-        
-        if (appeals.length > 0 && this.autoResponseEnabled) {
-            appeals.forEach(appeal => {
-                const success = this.addAppealToQueue({
-                    ...appeal,
-                    timestamp: Date.now()
-                });
-                
-                if (success) {
-                    console.log('✅ Added appeal to queue:', appeal.appealId);
-                } else {
-                    console.log('⚠️ Appeal rejected by queue:', appeal.appealId);
-                }
-            });
-        } else if (!this.autoResponseEnabled) {
-            console.log('🚫 Auto-response disabled, appeals not queued');
+        // Просто делегируйте новому обработчику
+        if (window.simplifiedHandler) {
+            window.simplifiedHandler.checkForAppeals(source);
+        } else {
+            console.log('⚠️ SimplifiedHandler not available, skipping appeal check');
         }
     }
 
@@ -1598,447 +768,68 @@ class OmniChatTrafficAnalyzer {
 
     // ===== TEMPLATE-BASED RESPONSE SYSTEM =====
     async processAppeal(appeal) {
-    const startTime = Date.now();
-    const activity = {
-        appealId: appeal.appealId,
-        timestamp: startTime,
-        action: 'process'
-    };
+        const startTime = Date.now();
 
-    // КРИТИЧНО: Проверка через GreetingTracker
-    if (this.greetingTracker && appeal.element) {
-        if (this.greetingTracker.wasGreeted(appeal.element, appeal.appealId)) {
-            console.log('🚫 Appeal already greeted (GreetingTracker check):', appeal.appealId);
+        // Используем координатор вместо собственных проверок
+        if (!window.unifiedCoordinator?.canProcessAppeal(appeal.appealId, appeal.element)) {
+            console.log('⏭️ Skipping - coordinator check failed');
             return;
-        }
-    }
-
-    // Пытаемся получить блокировку
-    const lockAcquired = await this.greetingLock.acquire(appeal.appealId);
-    if (!lockAcquired) {
-        console.log('🚫 Could not acquire lock, another process is handling:', appeal.appealId);
-        return;
-    }
-
-    try {
-        // Двойная проверка после получения блокировки
-        if (this.greetingTracker && appeal.element) {
-            if (this.greetingTracker.wasGreeted(appeal.element, appeal.appealId)) {
-                console.log('🚫 Appeal greeted while waiting for lock:', appeal.appealId);
-                return;
-            }
-        }
-
-        // ВАЖНО: Сначала проверяем, не было ли обращение уже обработано
-        // (на случай если оно каким-то образом попало в очередь повторно)
-        if (this.processedAppeals.has(appeal.appealId)) {
-            console.log('⚠️ Appeal already processed, skipping:', appeal.appealId);
-            return;
-        }
-
-        // НОВАЯ ПРОВЕРКА: Было ли уже отправлено приветствие
-        if (this.greetedAppeals.has(appeal.appealId)) {
-            const greetedTime = this.greetedAppeals.get(appeal.appealId);
-            const timeSinceGreeted = Date.now() - greetedTime;
-            const oneHour = 60 * 60 * 1000;
-
-            if (timeSinceGreeted < oneHour) {
-                console.log('⚠️ Greeting already sent to this appeal:', appeal.appealId);
-                console.log(`   Sent ${Math.round(timeSinceGreeted / 1000)}s ago`);
-                return;
-            }
         }
 
         console.log('🤖 Starting template response for appeal:', appeal.appealId);
-        
-        // Step 0: Comprehensive pre-send validation
-        console.log('🔍 Step 0: Running pre-send validation checks...');
-        
-        if (!window.location.href.includes('omnichat.rt.ru')) {
-            throw new Error('Not on OmniChat page');
-        }
-        
-        // Validate appeal data
-        if (!appeal.appealId || appeal.appealId.trim().length === 0) {
-            throw new Error('Invalid appeal ID');
-        }
-        
-        // Check if UI is ready - improved selectors
-        const requiredElements = {
-            messageInput: document.querySelector([
-                'textarea[placeholder*="Введите"]',
-                'input[placeholder*="сообщение"]',
-                'div[contenteditable="true"]',
-                'textarea[data-testid*="input"]',
-                'input[data-testid*="input"]',
-                'textarea[class*="input"]',
-                'input[class*="input"]',
-                // Общие селекторы для OmniChat
-                'textarea',
-                'input[type="text"]',
-                '[contenteditable="true"]'
-            ].join(', ')),
-            templateButton: document.querySelector([
-                'button[data-testid="choose-templates"]',
-                'button[title*="шаблон"]',
-                'button[data-testid*="template"]',
-                'button[class*="template"]',
-                // Поиск любых кнопок рядом с полем ввода
-                'button[type="button"]'
-            ].join(', '))
-        };
-        
-        if (!requiredElements.messageInput) {
-            console.log('⚠️ Message input field not found. Available inputs:');
-            const allInputs = document.querySelectorAll('input, textarea, [contenteditable]');
-            allInputs.forEach((input, i) => {
-                console.log(`  ${i+1}. ${input.tagName} - placeholder: "${input.placeholder || 'none'}" - class: "${input.className}"`);
+
+        try {
+            // Базовая проверка UI
+            if (!window.location.href.includes('omnichat.rt.ru')) {
+                throw new Error('Not on OmniChat page');
+            }
+
+            // Step 1: Выбор обращения
+            if (appeal.element) {
+                console.log('👆 Selecting appeal...');
+                await this.selectAppeal(appeal);
+                await this.wait(2000); // Ждем загрузки UI
+            }
+
+            // Step 2: Отправка шаблона
+            console.log('📋 Opening template selector...');
+            const success = await this.sendTemplateMessage();
+
+            if (!success) {
+                throw new Error('Failed to send template message');
+            }
+
+            // Step 3: Пометка как обработанное через координатор
+            console.log('✅ Successfully processed appeal:', appeal.appealId);
+            if (window.unifiedCoordinator) {
+                await window.unifiedCoordinator.markAsProcessed(appeal.appealId, appeal.element, 'success');
+            }
+
+            // Сохраняем активность
+            this.saveRecentActivity({
+                appealId: appeal.appealId,
+                success: true,
+                responseTime: Date.now() - startTime,
+                timestamp: startTime
             });
-            throw new Error('Message input field not found - UI not ready');
-        }
 
-        if (!requiredElements.templateButton) {
-            console.log('⚠️ Template button not found. Available buttons:');
-            const allButtons = document.querySelectorAll('button');
-            allButtons.forEach((btn, i) => {
-                if (i < 10) { // Показываем только первые 10
-                    console.log(`  ${i+1}. title: "${btn.title || 'none'}" - class: "${btn.className}" - text: "${btn.textContent?.substring(0, 20)}"`);
-                }
+        } catch (error) {
+            console.error('❌ Error processing appeal:', error.message);
+
+            // Пометка как обработанное даже при ошибке (предотвращает спам)
+            if (window.unifiedCoordinator) {
+                await window.unifiedCoordinator.markAsProcessed(appeal.appealId, appeal.element, 'failed');
+            }
+
+            this.saveRecentActivity({
+                appealId: appeal.appealId,
+                success: false,
+                error: error.message,
+                responseTime: Date.now() - startTime,
+                timestamp: startTime
             });
-            throw new Error('Template button not found - UI not ready');
         }
-        
-        // Check if we're in the right conversation context
-        const conversationIndicators = document.querySelectorAll(
-            '[data-testid*="conversation"], .conversation-title, .chat-header, [class*="chat"], [class*="message"], [data-testid*="chat"]'
-        );
-        if (conversationIndicators.length === 0) {
-            console.log('⚠️ No conversation context indicators found');
-            console.log('🔍 Available UI elements:');
-            const elements = document.querySelectorAll('[data-testid], [class*="sc-"]');
-            for (let i = 0; i < Math.min(elements.length, 5); i++) {
-                const el = elements[i];
-                console.log(`  ${i+1}. ${el.tagName} - testid: "${el.dataset.testid || 'none'}" - class: "${el.className}"`);
-            }
-        }
-        
-        console.log('✅ Pre-send validation passed');
-        
-        // Step 1: Выбираем обращение (если есть элемент)
-        if (appeal.element) {
-            console.log('👆 Step 1: Selecting appeal element...');
-            const selected = await this.selectAppeal(appeal);
-            if (!selected) {
-                console.log('⚠️ Could not select appeal, continuing anyway...');
-            }
-
-            // Увеличиваем задержку для загрузки UI чата
-            console.log('🔄 Waiting for chat UI to load...');
-            await this.wait(Math.max(this.templateConfig.clickDelay, 2000)); // Минимум 2 секунды
-
-            // Проверяем, что UI загрузился с подробной диагностикой
-            await this.waitForChatUI();
-        }
-        
-        // Step 2: Открываем селектор шаблонов
-        console.log('📋 Step 2: Opening template selector...');
-        
-        // Ищем кнопку шаблонов
-        let templateButton = document.querySelector('button[data-testid="choose-templates"]');
-        
-        if (!templateButton) {
-            // Альтернативный поиск
-            console.log('⚠️ Template button not found by data-testid, trying alternative selectors...');
-            templateButton = document.querySelector('button[title="Выбрать шаблон"]') ||
-                           document.querySelector('button[title*="шаблон"]');
-        }
-        
-        if (!templateButton) {
-            throw new Error('Template button not found');
-        }
-        
-        console.log('✅ Found template button, clicking...');
-        templateButton.click();
-        
-        // Ждем появления модального окна
-        await this.wait(800);
-        
-        // Проверяем, что модальное окно открылось
-        const modal = document.querySelector('div[data-testid="modal"]');
-        if (!modal) {
-            console.log('⚠️ Modal not found, retrying...');
-            templateButton.click();
-            await this.wait(1000);
-            
-            const modalRetry = document.querySelector('div[data-testid="modal"]');
-            if (!modalRetry) {
-                throw new Error('Failed to open template modal');
-            }
-        }
-        
-        console.log('✅ Template modal opened');
-        
-        // Ждем загрузки шаблонов
-        await this.wait(500);
-        
-        // Step 3: Выбираем шаблон
-        console.log('✅ Step 3: Selecting template...');
-        
-        const templates = document.querySelectorAll('div[data-testid="reply-template"]');
-        console.log(`📋 Found ${templates.length} templates`);
-        
-        if (templates.length === 0) {
-            throw new Error('No templates found in modal');
-        }
-        
-        let targetTemplate = null;
-        
-        // Ищем шаблон по тексту
-        for (const template of templates) {
-            const textElement = template.querySelector('div[data-testid="collapsable-text"]');
-            const titleElement = template.querySelector('span[data-testid="reply-title"]');
-            
-            if (textElement) {
-                const templateText = textElement.textContent?.trim();
-                const templateTitle = titleElement?.textContent?.trim() || '';
-                
-                // Проверяем по тексту
-                if (templateText && templateText.includes(this.templateConfig.templateText)) {
-                    console.log('✅ Found matching template by text');
-                    targetTemplate = template;
-                    break;
-                }
-                
-                // Проверяем по заголовку
-                if (this.templateConfig.templateTitle && templateTitle.includes(this.templateConfig.templateTitle)) {
-                    console.log('✅ Found matching template by title:', templateTitle);
-                    targetTemplate = template;
-                    break;
-                }
-                
-                // Специальная проверка для первого шаблона приветствия
-                if (templateTitle.includes('1.1 Приветствие')) {
-                    console.log('✅ Found greeting template 1.1');
-                    targetTemplate = template;
-                    break;
-                }
-            }
-        }
-        
-        // Если не нашли, берем первый
-        if (!targetTemplate && templates.length > 0) {
-            console.log('⚠️ Specific template not found, using first template');
-            targetTemplate = templates[0];
-        } else if (!targetTemplate) {
-            throw new Error('No templates available in modal');
-        }
-        
-        // Кликаем на шаблон
-        const templateTitle = targetTemplate.querySelector('span[data-testid="reply-title"]')?.textContent;
-        console.log(`👆 Clicking template: ${templateTitle}`);
-        
-        targetTemplate.click();
-        
-        // Ждем, пока текст вставится
-        await this.wait(800);
-        
-        // Проверяем, что текст вставился
-        const messageInput = document.querySelector('textarea') || 
-                           document.querySelector('[contenteditable="true"]') ||
-                           document.querySelector('div[role="textbox"]');
-        
-        if (messageInput) {
-            const insertedText = messageInput.value || messageInput.textContent || messageInput.innerText;
-            if (insertedText && insertedText.trim().length > 0) {
-                console.log('✅ Template text inserted successfully');
-                console.log('📝 Text preview:', insertedText.substring(0, 50) + '...');
-            } else {
-                console.log('⚠️ Warning: No text detected in input field');
-            }
-        }
-        
-        // Закрываем модальное окно, если оно еще открыто
-        const closeButton = document.querySelector('div[data-testid="modal"] button[data-testid="functionButton"]');
-        if (closeButton) {
-            console.log('🔒 Closing modal...');
-            closeButton.click();
-            await this.wait(300);
-        }
-        
-        // Step 4: Final validation before sending message
-        console.log('📤 Step 4: Final validation and sending message...');
-        
-        // Final validation checks
-        const messageInputFinal = document.querySelector('textarea') || 
-                                 document.querySelector('[contenteditable="true"]') ||
-                                 document.querySelector('div[role="textbox"]');
-        
-        if (!messageInputFinal) {
-            throw new Error('Final validation failed: Message input not found');
-        }
-        
-        const finalText = messageInputFinal.value || messageInputFinal.textContent || messageInputFinal.innerText;
-        if (!finalText || finalText.trim().length === 0) {
-            throw new Error('Final validation failed: No message text to send');
-        }
-        
-        if (finalText.trim().length < 10) {
-            throw new Error('Final validation failed: Message text too short');
-        }
-        
-        console.log('✅ Final validation passed, message ready to send');
-        console.log('📝 Final message preview:', finalText.substring(0, 100) + (finalText.length > 100 ? '...' : ''));
-        
-        // Ищем кнопку отправки
-        const sendButtonSelectors = [
-            'button[title="Отправить"]',
-            'button[title="Отправить сообщение"]',
-            'button[aria-label="Отправить"]',
-            'button[aria-label="Отправить сообщение"]',
-            'button[data-testid="send-message"]',
-            'button[data-testid="send-button"]',
-            'button[type="submit"]:not([disabled])',
-            '.send-button',
-            '.message-send'
-        ];
-        
-        let sendButton = null;
-        
-        for (const selector of sendButtonSelectors) {
-            sendButton = document.querySelector(selector);
-            if (sendButton && !sendButton.disabled) {
-                console.log('✅ Found send button with selector:', selector);
-                break;
-            }
-        }
-        
-        if (!sendButton) {
-            console.log('⚠️ Send button not found, trying Enter key method...');
-            
-            if (messageInput) {
-                messageInput.focus();
-                
-                // Симулируем нажатие Enter
-                const enterEvent = new KeyboardEvent('keydown', {
-                    key: 'Enter',
-                    code: 'Enter',
-                    keyCode: 13,
-                    which: 13,
-                    bubbles: true,
-                    cancelable: true
-                });
-                
-                messageInput.dispatchEvent(enterEvent);
-                console.log('⌨️ Enter key pressed');
-            } else {
-                throw new Error('No send button and no message input found');
-            }
-        } else {
-            // Check debouncing before clicking
-            const buttonId = 'send-button';
-            if (this.isClickDebounced(buttonId)) {
-                console.log('⏳ Send button click debounced, skipping');
-                return;
-            }
-            
-            // Кликаем на кнопку отправки (убираем дублирующие события)
-            sendButton.click();
-            this.recordClick(buttonId);
-            
-            console.log('✅ Send button clicked');
-        }
-        
-        // Финальная проверка
-        await this.wait(500);
-        
-        // Проверяем, что сообщение отправлено (поле ввода должно быть пустым)
-        if (messageInput) {
-            const remainingText = messageInput.value || messageInput.textContent || messageInput.innerText;
-            if (!remainingText || remainingText.trim().length === 0) {
-                console.log('✅ Message sent successfully (input field is empty)');
-            } else {
-                console.log('⚠️ Warning: Input field still contains text');
-            }
-        }
-        
-        // ... весь код обработки ...
-        
-        // После успешной отправки СРАЗУ маркируем как обработанное
-        // ПЕРЕД любыми другими действиями
-        console.log('✅ Successfully processed appeal:', appeal.appealId);
-        
-        // КРИТИЧНО: Сохраняем в память немедленно (нормализованный ID)
-        const normalizedId = this.normalizeAppealId(appeal.appealId);
-        this.processedAppeals.add(normalizedId);
-        this.processedTimestamps.set(normalizedId, Date.now());
-
-        // После успешной отправки добавляем в отслеживание приветствий
-        this.greetedAppeals.set(normalizedId, Date.now());
-
-        // Сохраняем в storage
-        const greetedObject = {};
-        this.greetedAppeals.forEach((timestamp, id) => {
-            greetedObject[id] = timestamp;
-        });
-        chrome.storage.local.set({ greetedAppeals: greetedObject });
-
-        // КРИТИЧНО: Сразу сохраняем в storage, не откладывая
-        await this.saveProcessedAppealImmediately(normalizedId);
-        
-        // Записываем успех
-        activity.success = true;
-        activity.responseTime = Date.now() - startTime;
-        
-    } catch (error) {
-        console.error('❌ Error processing appeal:', error.message);
-        
-        // ВАЖНО: Проверяем, не было ли сообщение отправлено несмотря на ошибку
-        const messageInput = document.querySelector('textarea') || 
-                           document.querySelector('[contenteditable="true"]');
-        const hasText = messageInput && (messageInput.value || messageInput.textContent || '').trim();
-        
-        if (!hasText) {
-            // Поле пустое - возможно, сообщение было отправлено
-            console.log('⚠️ Input field is empty - message might have been sent');
-            
-            // На всякий случай маркируем как обработанное (нормализованный ID)
-            const normalizedId = this.normalizeAppealId(appeal.appealId);
-            this.processedAppeals.add(normalizedId);
-            this.processedTimestamps.set(normalizedId, Date.now());
-            await this.saveProcessedAppealImmediately(normalizedId);
-
-            console.log('⚠️ Marked as processed to prevent duplicates');
-            return; // НЕ добавляем обратно в очередь
-        }
-        
-        // Только если мы уверены, что сообщение НЕ было отправлено
-        activity.success = false;
-        activity.error = error.message;
-        activity.responseTime = Date.now() - startTime;
-        
-        // КРИТИЧНО: НЕ ДОБАВЛЯЕМ ОБРАТНО В ОЧЕРЕДЬ ПРИ ОШИБКАХ
-        // Чтобы избежать бесконечного спама
-        console.log('❌ Processing failed, NOT retrying to prevent spam');
-        console.log('Appeal will NOT be added back to queue:', appeal.appealId);
-        
-        // Маркируем как обработанное, чтобы не пытаться снова (нормализованный ID)
-        const normalizedFailedId = this.normalizeAppealId(appeal.appealId);
-        this.processedAppeals.add(normalizedFailedId);
-        this.processedTimestamps.set(normalizedFailedId, Date.now());
-        await this.saveProcessedAppealImmediately(normalizedFailedId);
     }
-    
-    // Сохраняем активность
-    this.saveRecentActivity(activity);
-    
-    // Логируем итоговую статистику
-    console.log('📊 Processing complete:', {
-        appealId: appeal.appealId,
-        success: activity.success,
-        time: `${activity.responseTime}ms`,
-        retries: appeal.retryCount || 0
-    });
-}
 
     async selectAppeal(appeal) {
         console.log('👆 Selecting appeal:', appeal.appealId);
@@ -2653,22 +1444,15 @@ class OmniChatTrafficAnalyzer {
         console.log('🔄 Periodic sync started (every 30 seconds)');
     }
     
-    // Новый метод: Периодическая проверка новых обращений
+    // DISABLED: Periodic checks now handled by simplifiedHandler.js
     startPeriodicAppealCheck() {
-        // Увеличиваем интервал до 30 секунд вместо 15
-        setInterval(() => {
-            if (this.autoResponseEnabled && !this.isProcessingQueue) {
-                // Проверяем только если нет активных обращений в обработке
-                if (this.appealQueue.length === 0) {
-                    console.log('🔍 Periodic appeal check...');
-                    this.checkForExistingAppeals('periodic-30s');
-                } else {
-                    console.log('⏳ Skipping periodic check - queue not empty');
-                }
-            }
-        }, 30000); // 30 секунд вместо 15
-
-        console.log('🕰️ Periodic appeal check started (every 30 seconds)');
+        console.log('🚫 Periodic checks disabled - handled by simplifiedHandler.js');
+        // setInterval(() => {
+        //     if (this.autoResponseEnabled && !this.isProcessingQueue) {
+        //         console.log('🔍 Periodic appeal check...');
+        //         this.checkForExistingAppeals('periodic-30s');
+        //     }
+        // }, 30000);
     }
 
     startPeriodicCleanup() {
@@ -2811,10 +1595,10 @@ class OmniChatTrafficAnalyzer {
                 if (this.isNewAppealNotification(data)) {
                     console.log('🔔 New appeal detected via API:', appealId);
                     
-                    // Добавляем небольшую задержку для обновления UI
-                    setTimeout(() => {
-                        this.checkForExistingAppeals('network-trigger');
-                    }, 1000);
+                    // DISABLED: Network triggers disabled to prevent duplicates
+                    // setTimeout(() => {
+                    //     this.checkForExistingAppeals('network-trigger');
+                    // }, 1000);
                 }
             }
         }
@@ -3231,8 +2015,8 @@ class OmniChatTrafficAnalyzer {
                         testElement.appendChild(timer);
                     }
 
-                    const appealId = this.appealIdSystem.extractOrGenerateAppealId(testElement);
-                    const isNew = appealId ? this.appealIdSystem.isNewUnprocessedAppeal(testElement) : false;
+                    const appealId = this.simpleExtractAppealId(testElement);
+                    const isNew = appealId ? this.isNewAppeal(testElement) : false;
                     const isEligible = appealId ? this.isAppealEligibleForProcessing(appealId) : false;
 
                     console.log(`    - Appeal ID: ${appealId}`);
@@ -3641,8 +2425,9 @@ class OmniChatTrafficAnalyzer {
                 console.log('='.repeat(40));
 
                 // 1. Проверяем доступность системы
-                if (!this.appealIdSystem) {
-                    console.log('❌ AppealIdentificationSystem not available');
+                // AppealIdentificationSystem replaced with simpler functions
+                if (!this.simpleExtractAppealId) {
+                    console.log('❌ Simple appeal ID extraction not available');
                     return { error: 'System not available' };
                 }
 
@@ -3671,7 +2456,7 @@ class OmniChatTrafficAnalyzer {
 
                     console.log(`\n🧪 Testing element ${i + 1} (Appeal: ${appealId}):`);
 
-                    const testResult = this.appealIdSystem.testFingerprintStability(element);
+                    // Fingerprint stability tests removed with AppealIdentificationSystem
                     results.tests.push({
                         elementIndex: i,
                         appealId: appealId,
@@ -3723,11 +2508,11 @@ class OmniChatTrafficAnalyzer {
                 appealElements.forEach((element, index) => {
                     if (index < 5) { // Анализируем первые 5
                         const appealId = this.extractAppealIdFromElement(element);
-                        const timerCheck = this.appealIdSystem.checkTimer(element);
+                        const timerCheck = { hasTimer: /\d+\s*сек/i.test(element.textContent || ''), seconds: null };
                         const isProcessed = this.processedAppeals.has(appealId) ||
                                           element.dataset.omniProcessed === 'true';
                         const wasGreeted = appealId && this.greetingTracker?.wasGreeted?.(element, appealId);
-                        const isNew = this.appealIdSystem.isNewUnprocessedAppeal(element);
+                        const isNew = this.isNewAppeal(element);
 
                         console.log(`\n${index + 1}. Appeal ${appealId}:`);
                         console.log(`   Timer: ${timerCheck.hasTimer ? timerCheck.seconds + 's' : 'NO'}`);
@@ -3814,10 +2599,6 @@ class OmniChatTrafficAnalyzer {
                 console.log('='.repeat(50));
 
                 const results = {
-                    detectionCoordinator: {
-                        available: !!this.detectionCoordinator,
-                        stats: null
-                    },
                     systems: {
                         appealMonitor: {
                             available: !!window.appealMonitor,
@@ -3834,18 +2615,11 @@ class OmniChatTrafficAnalyzer {
                     recommendations: []
                 };
 
-                // 1. Проверяем DetectionCoordinator
-                console.log('1. Detection Coordinator Status:');
-                if (this.detectionCoordinator) {
-                    console.log('   ✅ DetectionCoordinator available');
-                    results.detectionCoordinator.stats = this.detectionCoordinator.getDetectionStats();
-                    console.log(`   📊 Total detections: ${results.detectionCoordinator.stats.totalDetections}`);
-                    console.log(`   📊 Unique appeals: ${results.detectionCoordinator.stats.uniqueAppeals}`);
-                    console.log(`   📊 Deduplication rate: ${results.detectionCoordinator.stats.deduplicationRate}%`);
-                } else {
-                    console.log('   ❌ DetectionCoordinator not available');
-                    results.recommendations.push('Initialize DetectionCoordinator');
-                }
+                // 1. Check deduplication system
+                console.log('1. Deduplication System Status:');
+                console.log(`   📊 Processed appeals: ${this.processedAppeals.size}`);
+                console.log(`   📊 Queue length: ${this.appealQueue.length}`);
+                console.log('   ✅ Using integrated deduplication system');
 
                 // 2. Анализируем AppealMonitor системы
                 console.log('\n2. AppealMonitor Detection Systems:');
@@ -3920,16 +2694,8 @@ class OmniChatTrafficAnalyzer {
                 // 5. Рекомендации
                 console.log('\n5. Recommendations:');
 
-                if (results.detectionCoordinator.available) {
-                    console.log('   ✅ DetectionCoordinator active - managing deduplication');
-                    if (results.detectionCoordinator.stats.deduplicationRate > 20) {
-                        console.log(`   ⚠️  High deduplication rate (${results.detectionCoordinator.stats.deduplicationRate}%) indicates significant overlap`);
-                        results.recommendations.push('Consider optimizing detection intervals');
-                    }
-                } else {
-                    console.log('   ❌ Consider implementing centralized coordination');
-                    results.recommendations.push('Implement DetectionCoordinator');
-                }
+                console.log('   ✅ Integrated deduplication active');
+                console.log('   ✅ Using processedAppeals system for deduplication');
 
                 console.log(`   📊 Total active systems: ${results.totalSystems}`);
                 if (results.totalSystems > 4) {
@@ -4536,9 +3302,9 @@ class OmniChatTrafficAnalyzer {
                 };
             },
 
-            // Test the new AppealIdentificationSystem
+            // Test simplified appeal ID extraction
             testNewIdentificationSystem: () => {
-                console.log('🧪 Testing new AppealIdentificationSystem...');
+                console.log('🧪 Testing simplified appeal ID extraction...');
 
                 // Create test elements with different characteristics
                 const testCases = [
@@ -4577,15 +3343,15 @@ class OmniChatTrafficAnalyzer {
 
                     try {
                         // Test ID extraction
-                        const appealId = this.appealIdSystem.extractOrGenerateAppealId(testElement);
+                        const appealId = this.simpleExtractAppealId(testElement);
                         console.log('📝 Generated ID:', appealId);
 
                         // Test new appeal detection
-                        const isNew = appealId ? this.appealIdSystem.isNewUnprocessedAppeal(testElement) : false;
+                        const isNew = appealId ? this.isNewAppeal(testElement) : false;
                         console.log('🆕 Is new appeal:', isNew);
 
                         // Test timer detection
-                        const timerCheck = this.appealIdSystem.checkTimer(testElement);
+                        const timerCheck = { hasTimer: /\d+\s*сек/i.test(testElement.textContent || ''), seconds: null };
                         console.log('⏱️ Timer check:', timerCheck);
 
                         // Evaluate results
@@ -4621,7 +3387,7 @@ class OmniChatTrafficAnalyzer {
                 const successful = results.filter(r => r.success).length;
                 const total = results.length;
 
-                console.log(`\n📊 AppealIdentificationSystem Test Results: ${successful}/${total} tests passed`);
+                console.log(`\n📊 Simplified Appeal Detection Test Results: ${successful}/${total} tests passed`);
 
                 // Test fingerprint system
                 console.log('\n🔑 Testing fingerprint generation...');
@@ -4630,8 +3396,9 @@ class OmniChatTrafficAnalyzer {
                 tempElement.innerHTML = '<span>Test Client</span><span>Test message content</span>';
                 document.body.appendChild(tempElement);
 
-                const fingerprint1 = this.appealIdSystem.createAppealFingerprint(tempElement);
-                const fingerprint2 = this.appealIdSystem.createAppealFingerprint(tempElement);
+                // Fingerprint testing removed with AppealIdentificationSystem
+                const fingerprint1 = 'test1';
+                const fingerprint2 = 'test2';
 
                 console.log('🔑 Same element generates same fingerprint:', fingerprint1 === fingerprint2 ? '✅' : '❌');
 
