@@ -157,14 +157,16 @@ class AppealMonitor {
         console.log('✅ Periodic check started (every 60 seconds)');
     }
 
-    // === МЕХАНИЗМ 3: AppealMonitor проверка (10 секунд) ===
+    // === МЕХАНИЗМ 3: AppealMonitor проверка (30 секунд) ===
     startAppealMonitorCheck() {
         this.checkInterval = setInterval(() => {
-            // ИСПРАВЛЕНИЕ: Увеличиваем интервал до 30 секунд для снижения нагрузки
+            const timestamp = new Date().toLocaleTimeString();
+            console.log(`⏰ [${timestamp}] AppealMonitor: Starting periodic check (30s interval)`);
             this.checkForAppeals('appeal-monitor-30s');
         }, 30000);
 
-        console.log('✅ AppealMonitor check started (every 30 seconds)');
+        console.log('✅ AppealMonitor periodic check started (every 30 seconds)');
+        console.log('📍 AppealMonitor will log detection activity with timestamps');
     }
 
     // Вспомогательные методы для DOM Observer
@@ -1361,12 +1363,17 @@ console.log('  - Network Intercept: Monitors network requests for appealId');
 console.log('\n🛡️ DEDUPLICATION: Active (prevents multiple detections of same appeal)');
 
 // КОНТРОЛИРУЕМЫЙ АВТОМАТИЧЕСКИЙ ЗАПУСК
-// Без спама, но с обнаружением
-// Отключаем автозапуск
-// setTimeout(() => {
-//     window.appealMonitor.start();
-//     console.log('✅ AppealMonitor started in controlled mode');
-// }, 2000);
+// Включаем автозапуск с задержкой для полной инициализации
+setTimeout(() => {
+    if (window.appealMonitor && !window.appealMonitor.isMonitoring) {
+        console.log('🚀 Starting AppealMonitor with 5-second initialization delay...');
+        window.appealMonitor.start();
+        console.log('✅ AppealMonitor started in controlled mode');
+        console.log('📊 Detection mechanisms active: DOM Observer, Periodic Check (30s), Appeal Check (30s)');
+    } else {
+        console.log('⚠️ AppealMonitor already running or not available');
+    }
+}, 5000); // 5-second delay to ensure full page load
 
-console.log('\n🚫 Spam protection: Active (controlled processing only)');
+console.log('\n🔄 Auto-start enabled: AppealMonitor will start in 5 seconds');
 console.log('Manual commands still available: appealMonitor.stop(), appealMonitor.quickSendTemplate()');

@@ -53,39 +53,9 @@ class OmniChatTrafficAnalyzer {
             checkDelay: 2000 // 2 seconds delay for batching
         };
 
-        // Simple appeal ID extraction helpers (replaces complex AppealIdentificationSystem)
-        this.simpleExtractAppealId = (element) => {
-            // Try to find real appeal numbers first
-            const text = element.textContent || '';
-            const patterns = [
-                /Обращение\s*№\s*(\d{5,})/i,
-                /Обращение[:\s#]+(\d{5,})/i,
-                /Appeal[:\s#№]+(\d{5,})/i,
-                /#(\d{5,})/,
-                /ID[:\s]+(\d{5,})/i,
-                /№\s*(\d{5,})/
-            ];
-
-            for (const pattern of patterns) {
-                const match = text.match(pattern);
-                if (match) return match[1];
-            }
-
-            // Check data attributes
-            return element.dataset?.appealId ||
-                   element.dataset?.appealid ||
-                   element.getAttribute('data-appeal-id') ||
-                   null;
-        };
-
-        this.isNewAppeal = (element) => {
-            // Simple check for new appeal indicators
-            const hasBadge = !!element.querySelector('[data-testid="badge"], [data-testid="dot"], .badge, .new');
-            const hasTimer = /\d+\s*сек/i.test(element.textContent || '');
-            const hasNewClass = element.className.includes('unread') || element.className.includes('new');
-
-            return hasBadge || (hasTimer && parseInt((element.textContent.match(/(\d+)\s*сек/i) || [])[1]) < 30) || hasNewClass;
-        };
+        // Use shared utilities for appeal processing
+        this.simpleExtractAppealId = (element) => window.OmniChatUtils.extractAppealId(element);
+        this.isNewAppeal = (element) => window.OmniChatUtils.isNewAppeal(element);
 
         // Отслеживание приветствий в сессии
         this.greetedAppeals = new Map(); // appealId -> timestamp
@@ -328,12 +298,7 @@ class OmniChatTrafficAnalyzer {
             return;
         }
 
-        console.log('🆕 New unprocessed appeal detected:', appealId);
-        console.log('  📝 Appeal details:');
-        console.log('    - Element classes:', appealElement.className);
-        console.log('    - Element text preview:', (appealElement.textContent || '').substring(0, 100));
-        console.log('    - Has timer:', !!appealElement.querySelector('[class*="timer"]') || /\d+\s*сек/i.test(appealElement.textContent || ''));
-        console.log('    - Auto-response enabled:', this.autoResponseEnabled);
+        console.log('🆕 New unprocessed appeal detected:', appealId, '- processing...');
 
         // Step 6: Mark element as processed immediately
         // Processing tracking handled by unifiedCoordinator
@@ -463,12 +428,10 @@ class OmniChatTrafficAnalyzer {
     }
 
     checkForExistingAppeals(source = 'manual') {
-        // Просто делегируйте новому обработчику
-        if (window.simplifiedHandler) {
-            window.simplifiedHandler.checkForAppeals(source);
-        } else {
-            console.log('⚠️ SimplifiedHandler not available, skipping appeal check');
-        }
+        // Detection is now handled by SimplifiedHandler independently
+        // This method is deprecated and should not trigger SimplifiedHandler
+        console.log(`⚠️ DEPRECATED: omniAnalyzer.requestAppealCheck("${source}") is no longer used`);
+        console.log('📍 Detection is now automatic via SimplifiedHandler → UnifiedCoordinator');
     }
 
     // ===== UNIFIED ID NORMALIZATION =====
@@ -770,11 +733,9 @@ class OmniChatTrafficAnalyzer {
     async processAppeal(appeal) {
         const startTime = Date.now();
 
-        // Используем координатор вместо собственных проверок
-        if (!window.unifiedCoordinator?.canProcessAppeal(appeal.appealId, appeal.element)) {
-            console.log('⏭️ Skipping - coordinator check failed');
-            return;
-        }
+        // LEGACY PROCESSING - Use for testing only
+        // Normal flow should go through SimplifiedHandler → UnifiedCoordinator → TemplateProcessor
+        console.log('⚠️ Using legacy processAppeal method - consider using unified flow');
 
         console.log('🤖 Starting template response for appeal:', appeal.appealId);
 
@@ -799,11 +760,9 @@ class OmniChatTrafficAnalyzer {
                 throw new Error('Failed to send template message');
             }
 
-            // Step 3: Пометка как обработанное через координатор
+            // Step 3: Пометка как обработанное (legacy method)
             console.log('✅ Successfully processed appeal:', appeal.appealId);
-            if (window.unifiedCoordinator) {
-                await window.unifiedCoordinator.markAsProcessed(appeal.appealId, appeal.element, 'success');
-            }
+            // Note: In unified flow, marking is handled by UnifiedCoordinator
 
             // Сохраняем активность
             this.saveRecentActivity({
@@ -816,10 +775,7 @@ class OmniChatTrafficAnalyzer {
         } catch (error) {
             console.error('❌ Error processing appeal:', error.message);
 
-            // Пометка как обработанное даже при ошибке (предотвращает спам)
-            if (window.unifiedCoordinator) {
-                await window.unifiedCoordinator.markAsProcessed(appeal.appealId, appeal.element, 'failed');
-            }
+            // Note: In unified flow, error handling is done by UnifiedCoordinator
 
             this.saveRecentActivity({
                 appealId: appeal.appealId,
@@ -828,6 +784,31 @@ class OmniChatTrafficAnalyzer {
                 responseTime: Date.now() - startTime,
                 timestamp: startTime
             });
+        }
+    }
+
+    // DEPRECATED: This method should no longer be called directly
+    // Processing is now handled by: SimplifiedHandler → UnifiedCoordinator → TemplateProcessor
+    async processAppealLegacy(appeal) {
+        console.warn('⚠️ DEPRECATED: processAppeal called directly on omniAnalyzer');
+        console.warn('⚠️ Use unified flow: SimplifiedHandler → UnifiedCoordinator → TemplateProcessor');
+        console.log('🔄 Redirecting to unified flow...');
+
+        // Redirect to unified flow
+        if (window.unifiedCoordinator && appeal.appealId) {
+            const added = await window.unifiedCoordinator.addToQueue(
+                appeal.appealId,
+                appeal.element,
+                'deprecated-redirect'
+            );
+
+            if (added) {
+                console.log('✅ Appeal redirected to unified processing flow');
+            } else {
+                console.log('⏭️ Appeal rejected by unified coordinator (likely duplicate)');
+            }
+        } else {
+            console.error('❌ Cannot redirect: UnifiedCoordinator not available or invalid appeal');
         }
     }
 
@@ -1038,202 +1019,15 @@ class OmniChatTrafficAnalyzer {
         return false;
     }
 
-    async openTemplateSelector() {
-        console.log('📋 Opening template selector...');
-        
-        // Используем реальный селектор из OmniChat
-        const templateButton = document.querySelector('button[data-testid="choose-templates"]');
-        
-        if (templateButton) {
-            console.log('✅ Found template button:', templateButton.title);
-            
-            // Кликаем на кнопку
-            templateButton.click();
-            
-            // Ждем появления модального окна
-            await this.wait(500);
-            
-            // Проверяем, что модальное окно открылось
-            const modal = document.querySelector('div[data-testid="modal"]');
-            if (modal) {
-                console.log('✅ Template modal opened');
-                
-                // Ждем загрузки шаблонов
-                await this.wait(300);
-                
-                // Проверяем наличие шаблонов
-                const templates = document.querySelectorAll('div[data-testid="reply-template"]');
-                console.log(`📋 Found ${templates.length} templates`);
-                
-                return true;
-            }
-        }
-        
-        console.log('❌ Failed to open template selector');
-        return false;
-    }
+    // Template processing methods moved to TemplateProcessor - use unified flow
 
-    async selectTemplate() {
-        console.log('✅ Selecting template:', this.templateConfig.templateText);
-        
-        // Ищем все шаблоны
-        const templates = document.querySelectorAll('div[data-testid="reply-template"]');
-        
-        if (templates.length === 0) {
-            console.log('❌ No templates found');
-            return false;
-        }
-        
-        // Ищем нужный шаблон по тексту
-        let targetTemplate = null;
-        
-        for (const template of templates) {
-            // Ищем текст шаблона
-            const textElement = template.querySelector('div[data-testid="collapsable-text"]');
-            const titleElement = template.querySelector('span[data-testid="reply-title"]');
-            
-            if (textElement) {
-                const templateText = textElement.textContent?.trim();
-                const templateTitle = titleElement?.textContent?.trim() || '';
-                
-                console.log(`Checking template: ${templateTitle}`);
-                
-                // Проверяем, содержит ли текст нужную фразу
-                if (templateText && templateText.includes(this.templateConfig.templateText)) {
-                    console.log('✅ Found matching template by text');
-                    targetTemplate = template;
-                    break;
-                }
-                
-                // Также проверяем по заголовку (1.1 Приветствие)
-                if (templateTitle.includes('1.1 Приветствие')) {
-                    console.log('✅ Found template 1.1 (first greeting template)');
-                    targetTemplate = template;
-                    break;
-                }
-            }
-        }
-        
-        // Если не нашли по тексту, берем первый шаблон
-        if (!targetTemplate) {
-            console.log('⚠️ Template not found by text, selecting first template');
-            targetTemplate = templates[0];
-        }
-        
-        if (targetTemplate) {
-            // Кликаем на шаблон
-            targetTemplate.click();
-            
-            // Также пробуем кликнуть на текстовую область внутри
-            const clickableArea = targetTemplate.querySelector('div[data-testid="collapsable-text"]') || 
-                                targetTemplate.querySelector('.sc-hLtZSE') || 
-                                targetTemplate;
-            
-            clickableArea.click();
-            
-            console.log('✅ Template clicked');
-            
-            // Ждем, пока шаблон вставится в поле ввода
-            await this.wait(500);
-            
-            // Закрываем модальное окно (если оно не закрылось автоматически)
-            const closeButton = document.querySelector('button[data-testid="functionButton"]');
-            if (closeButton) {
-                closeButton.click();
-                console.log('✅ Modal closed');
-            }
-            
-            return true;
-        }
-        
-        console.log('❌ Failed to select template');
-        return false;
-    }
+    // Template selection moved to TemplateProcessor - use unified flow
 
-    async sendTemplateMessage() {
-        console.log('📤 Sending template message...');
-        
-        // Ждем, пока текст шаблона вставится
-        await this.wait(500);
-        
-        // Проверяем, что текст вставлен в поле ввода
-        const messageInput = document.querySelector('textarea') || 
-                            document.querySelector('[contenteditable="true"]') ||
-                            document.querySelector('div[role="textbox"]');
-        
-        if (messageInput) {
-            const currentText = messageInput.value || messageInput.textContent || messageInput.innerText;
-            console.log('📝 Current message text:', currentText?.substring(0, 50) + '...');
-        }
-        
-        // Ищем кнопку отправки
-        const sendButtonSelectors = [
-            'button[title*="Отправить"]',
-            'button[aria-label*="Отправить"]',
-            'button[title*="отправить"]',
-            'button[aria-label*="отправить"]',
-            'button[data-testid="send-message"]',
-            'button[data-testid="send-button"]',
-            '.message-send-button',
-            'button[type="submit"]:not([disabled])'
-        ];
-        
-        let sendButton = null;
-        
-        for (const selector of sendButtonSelectors) {
-            sendButton = document.querySelector(selector);
-            if (sendButton && !sendButton.disabled) {
-                console.log('✅ Found send button with selector:', selector);
-                break;
-            }
-        }
-        
-        if (sendButton) {
-            // Убеждаемся, что кнопка видима и активна
-            const rect = sendButton.getBoundingClientRect();
-            if (rect.width > 0 && rect.height > 0) {
-                // Кликаем на кнопку
-                sendButton.click();
-                
-                // Дополнительно триггерим события для надежности
-                sendButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                sendButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                sendButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                
-                console.log('✅ Send button clicked');
-                return true;
-            }
-        }
-        
-        // Альтернативный метод - нажатие Enter
-        if (messageInput) {
-            console.log('⚠️ Send button not found, trying Enter key');
-            
-            messageInput.focus();
-            
-            // Симулируем нажатие Enter
-            const enterEvent = new KeyboardEvent('keydown', {
-                key: 'Enter',
-                code: 'Enter',
-                keyCode: 13,
-                which: 13,
-                bubbles: true,
-                cancelable: true
-            });
-            
-            messageInput.dispatchEvent(enterEvent);
-            
-            console.log('✅ Enter key pressed');
-            return true;
-        }
-        
-        console.log('❌ Failed to send message');
-        return false;
-    }
+    // Template message sending moved to TemplateProcessor - use unified flow
 
     // ===== HELPER METHODS =====
     wait(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
+        return window.OmniChatUtils.wait(ms);
     }
 
     async waitForChatUI(maxAttempts = 8) {

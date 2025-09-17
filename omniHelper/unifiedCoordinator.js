@@ -38,39 +38,13 @@ class UnifiedProcessingCoordinator {
         this.cleanup();
     }
     
-    // Нормализация ID (КРИТИЧНО!)
+    // Нормализация ID через общие утилиты
     normalizeId(appealId) {
-        if (!appealId) return null;
-        
-        // Убираем все префиксы и извлекаем числовой ID
-        let normalized = appealId.toString()
-            .replace(/^TEMP_.*?_/, '')
-            .replace(/^stable_/, '')
-            .replace(/^#/, '')
-            .trim();
-        
-        // Пытаемся извлечь числовой ID
-        const numMatch = normalized.match(/\d{5,}/);
-        if (numMatch) {
-            return numMatch[0];
-        }
-        
-        // Если числового ID нет, используем хэш от содержимого
-        if (normalized.length > 0) {
-            return this.hashString(normalized);
-        }
-        
-        return null;
+        return window.OmniChatUtils.normalizeAppealId(appealId);
     }
     
     hashString(str) {
-        let hash = 0;
-        for (let i = 0; i < str.length; i++) {
-            const char = str.charCodeAt(i);
-            hash = ((hash << 5) - hash) + char;
-            hash = hash & hash;
-        }
-        return Math.abs(hash).toString(36);
+        return window.OmniChatUtils.hashString(str);
     }
     
     // ГЛАВНЫЙ МЕТОД: Можно ли обработать обращение?
@@ -200,19 +174,87 @@ class UnifiedProcessingCoordinator {
         console.log('✅ Queue processing complete');
     }
     
-    // Отправка шаблона (заглушка - замените на реальный код)
+    // Отправка шаблона через TemplateProcessor (убираем зависимость от omniAnalyzer)
     async sendTemplateToAppeal(item) {
-        console.log('📤 Sending template to:', item.appealId);
-        
-        // ЗДЕСЬ ДОЛЖЕН БЫТЬ ВАШ КОД ОТПРАВКИ ШАБЛОНА
-        // Например, вызов существующего метода:
-        if (window.omniAnalyzer && window.omniAnalyzer.processAppeal) {
-            return await window.omniAnalyzer.processAppeal(item);
+        console.log('📤 UnifiedCoordinator: Delegating to TemplateProcessor:', item.appealId);
+
+        try {
+            // Проверяем доступность TemplateProcessor
+            if (!window.templateProcessor) {
+                throw new Error('TemplateProcessor not available');
+            }
+
+            // Подготавливаем данные для TemplateProcessor
+            const appealData = {
+                appealId: item.appealId,           // Normalized ID
+                originalId: item.originalId,       // Original ID
+                element: item.element,             // DOM element
+                source: item.source,               // Detection source
+                timestamp: item.timestamp || Date.now()
+            };
+
+            console.log('🔄 Passing to TemplateProcessor:', appealData);
+
+            // Вызываем обработку через TemplateProcessor
+            const success = await window.templateProcessor.processAppeal(appealData);
+
+            if (success) {
+                console.log('✅ TemplateProcessor completed successfully for:', item.appealId);
+            } else {
+                console.log('❌ TemplateProcessor failed for:', item.appealId);
+            }
+
+            return success;
+
+        } catch (error) {
+            console.error('❌ UnifiedCoordinator: Template processing error:', error.message);
+            console.error('Item data:', item);
+
+            // Проверяем доступность компонентов
+            const diagnostics = {
+                templateProcessor: !!window.templateProcessor,
+                currentPage: window.location.href,
+                itemStructure: Object.keys(item || {})
+            };
+            console.error('Diagnostics:', diagnostics);
+
+            return false;
         }
-        
-        // Для теста - эмуляция отправки
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        return Math.random() > 0.1; // 90% успех
+    }
+
+    // Вспомогательный метод для задержек
+    wait(ms) {
+        return window.OmniChatUtils.wait(ms);
+    }
+
+    // Тестирование интеграции с TemplateProcessor
+    async testSendTemplateIntegration(testAppealId = 'TEST-12345') {
+        console.log('🧪 Testing UnifiedCoordinator → TemplateProcessor integration...');
+
+        const testItem = {
+            appealId: this.normalizeId(testAppealId),
+            originalId: testAppealId,
+            element: null, // Тест без элемента
+            source: 'integration-test',
+            timestamp: Date.now()
+        };
+
+        console.log('📋 Test item:', testItem);
+        console.log('🔍 TemplateProcessor availability:', !!window.templateProcessor);
+
+        if (window.templateProcessor) {
+            console.log('📄 TemplateProcessor methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(window.templateProcessor))
+                .filter(name => typeof window.templateProcessor[name] === 'function' && name !== 'constructor'));
+        }
+
+        try {
+            const result = await this.sendTemplateToAppeal(testItem);
+            console.log('✅ Integration test result:', result);
+            return result;
+        } catch (error) {
+            console.error('❌ Integration test failed:', error);
+            return false;
+        }
     }
     
     // Пометка как обработанное

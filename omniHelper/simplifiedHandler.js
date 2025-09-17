@@ -6,7 +6,7 @@ class SimplifiedAppealHandler {
         this.autoResponseEnabled = true;
         this.domObserver = null;
         this.lastCheck = 0;
-        this.checkInterval = 60000; // 60 секунд между проверками (reduced from 30s)
+        this.checkInterval = 30000; // 30 секунд между проверками для гарантированного покрытия
         
         this.init();
     }
@@ -26,8 +26,50 @@ class SimplifiedAppealHandler {
         
         // Первая проверка через 3 секунды
         setTimeout(() => this.checkForAppeals('initial'), 3000);
-        
+
+        // Гарантируем активность системы - проверяем каждые 35 секунд, что хотя бы один механизм работает
+        this.heartbeatInterval = setInterval(() => this.verifyDetectionActivity(), 35000);
+
         console.log('✅ Handler initialized. Auto-response:', this.autoResponseEnabled ? 'ON' : 'OFF');
+        console.log('💓 Detection heartbeat: Will verify activity every 35 seconds');
+    }
+
+    // Проверка активности системы обнаружения
+    verifyDetectionActivity() {
+        const timestamp = new Date().toLocaleTimeString();
+        console.log(`💓 [${timestamp}] Detection Heartbeat Check:`);
+
+        let activeDetectors = 0;
+        const detectors = [];
+
+        // Проверяем SimplifiedHandler
+        if (this.checkInterval !== undefined) {
+            activeDetectors++;
+            detectors.push('SimplifiedHandler (30s)');
+        }
+
+        // Проверяем AppealMonitor
+        if (window.appealMonitor && window.appealMonitor.isMonitoring && window.appealMonitor.checkInterval) {
+            activeDetectors++;
+            detectors.push('AppealMonitor (30s)');
+        }
+
+        // Проверяем UnifiedCoordinator
+        if (window.unifiedCoordinator) {
+            activeDetectors++;
+            detectors.push('UnifiedCoordinator');
+        }
+
+        console.log(`📊 Active detectors: ${activeDetectors}`);
+        detectors.forEach(detector => console.log(`   ✅ ${detector}`));
+
+        if (activeDetectors === 0) {
+            console.error('🚨 CRITICAL: No detection mechanisms are active!');
+            console.log('🔧 Attempting to restart SimplifiedHandler...');
+            this.checkForAppeals('emergency-restart');
+        } else {
+            console.log(`✅ Detection system healthy: ${activeDetectors} mechanisms active`);
+        }
     }
     
     async loadSettings() {
@@ -107,36 +149,56 @@ class SimplifiedAppealHandler {
     // Периодическая проверка
     periodicCheck() {
         const now = Date.now();
-        if (now - this.lastCheck < 20000) return; // Не чаще раза в 20 секунд
-        
+        if (now - this.lastCheck < 25000) return; // Не чаще раза в 25 секунд (защита от спама)
+
         this.lastCheck = now;
-        this.checkForAppeals('periodic');
+        console.log('⏰ SimplifiedHandler: Starting periodic check (30s interval)');
+        this.checkForAppeals('periodic-30s');
     }
     
     // Основной метод проверки обращений
     async checkForAppeals(source) {
+        const timestamp = new Date().toLocaleTimeString();
+        console.log(`🔍 [${timestamp}] SimplifiedHandler: Checking for appeals (source: ${source})`);
+
         if (!this.autoResponseEnabled) {
-            console.log('🚫 Auto-response disabled');
+            console.log('🚫 Auto-response disabled - skipping check');
             return;
         }
-        
-        console.log(`🔍 Checking for appeals (source: ${source})`);
-        
+
         // Находим все элементы обращений
         const appealElements = this.findAppealElements();
-        console.log(`📊 Found ${appealElements.length} appeal elements`);
-        
+        console.log(`📊 [${timestamp}] Found ${appealElements.length} appeal elements on page`);
+
+        if (appealElements.length === 0) {
+            console.log('⚠️ No appeal elements found - check page structure or selectors');
+            return;
+        }
+
         let addedCount = 0;
-        
+        let processedCount = 0;
+        let newAppealsFound = 0;
+
         for (const element of appealElements) {
+            processedCount++;
+
             // Извлекаем информацию об обращении
             const appealInfo = this.extractAppealInfo(element);
-            
-            if (!appealInfo || !appealInfo.id) continue;
-            
+
+            if (!appealInfo || !appealInfo.id) {
+                console.log(`⚠️ Could not extract appeal info from element ${processedCount}`);
+                continue;
+            }
+
             // Проверяем, новое ли это обращение
-            if (!this.isNewAppeal(element, appealInfo)) continue;
-            
+            if (!this.isNewAppeal(element, appealInfo)) {
+                console.log(`⏭️ Appeal ${appealInfo.id} is not new - skipping`);
+                continue;
+            }
+
+            newAppealsFound++;
+            console.log(`🆕 New appeal detected: ${appealInfo.id} (${newAppealsFound}/${appealElements.length})`);
+
             // Используем единый координатор для проверки и добавления
             if (window.unifiedCoordinator) {
                 const added = await window.unifiedCoordinator.addToQueue(
@@ -144,81 +206,53 @@ class SimplifiedAppealHandler {
                     element,
                     source
                 );
-                
+
                 if (added) {
                     addedCount++;
-                    console.log(`✅ Added to queue: ${appealInfo.id}`);
-                    
+                    console.log(`✅ Successfully added to queue: ${appealInfo.id}`);
+
                     // Визуальная индикация
                     this.markElementAsQueued(element);
+                } else {
+                    console.log(`⏭️ Appeal ${appealInfo.id} rejected by coordinator (likely duplicate)`);
                 }
             } else {
-                console.error('❌ UnifiedCoordinator not available');
+                console.error('❌ UnifiedCoordinator not available - cannot add to queue');
                 break;
             }
         }
-        
+
+        // Детальная статистика
+        console.log(`📈 [${timestamp}] Detection Summary:`);
+        console.log(`   - Elements scanned: ${processedCount}`);
+        console.log(`   - New appeals found: ${newAppealsFound}`);
+        console.log(`   - Added to queue: ${addedCount}`);
+        console.log(`   - Queue status: ${window.unifiedCoordinator ? window.unifiedCoordinator.getStats() : 'unavailable'}`);
+
         if (addedCount > 0) {
-            console.log(`🎉 Added ${addedCount} new appeals to queue`);
+            console.log(`🎉 [${timestamp}] Successfully added ${addedCount} new appeals to processing queue`);
+        } else if (newAppealsFound > 0) {
+            console.log(`ℹ️ [${timestamp}] Found ${newAppealsFound} new appeals but none were added (likely duplicates)`);
+        } else {
+            console.log(`✔️ [${timestamp}] No new appeals detected - system operating normally`);
         }
     }
     
     // Поиск элементов обращений
     findAppealElements() {
-        const selectors = [
-            '[data-testid="appeal-preview"]',
-            '[data-appeal-id]',
-            '.appeal-item',
-            '.chat-item'
-        ];
-        
-        const elements = [];
-        
-        for (const selector of selectors) {
-            const found = document.querySelectorAll(selector);
-            elements.push(...Array.from(found));
-        }
-        
-        // Убираем дубликаты
-        return [...new Set(elements)];
+        return window.OmniChatUtils.findAppealElements();
     }
     
     // Извлечение информации об обращении
     extractAppealInfo(element) {
         const info = {
-            id: null,
+            id: window.OmniChatUtils.extractAppealId(element),
             hasTimer: false,
             timerSeconds: null
         };
-        
-        // Извлекаем ID
-        const text = element.textContent || '';
-        
-        // Паттерны для поиска ID
-        const patterns = [
-            /Обращение\s*№\s*(\d{5,})/i,
-            /Appeal[:\s#№]+(\d{5,})/i,
-            /#(\d{5,})/,
-            /ID[:\s]+(\d{5,})/i,
-            /№\s*(\d{5,})/
-        ];
-        
-        for (const pattern of patterns) {
-            const match = text.match(pattern);
-            if (match) {
-                info.id = match[1];
-                break;
-            }
-        }
-        
-        // Если не нашли в тексте, проверяем атрибуты
-        if (!info.id) {
-            info.id = element.dataset?.appealId || 
-                     element.dataset?.appealid ||
-                     element.getAttribute('data-appeal-id');
-        }
-        
+
         // Проверяем таймер
+        const text = window.OmniChatUtils.getTextContent(element);
         const timerMatch = text.match(/(\d+)\s*сек/i);
         if (timerMatch) {
             const seconds = parseInt(timerMatch[1]);
@@ -227,7 +261,7 @@ class SimplifiedAppealHandler {
                 info.timerSeconds = seconds;
             }
         }
-        
+
         return info;
     }
     
@@ -238,22 +272,14 @@ class SimplifiedAppealHandler {
             console.log(`⏰ New appeal with timer: ${appealInfo.timerSeconds}s`);
             return true;
         }
-        
-        // 2. Проверяем визуальные индикаторы
-        const hasBadge = !!element.querySelector('[data-testid="badge"], .badge, .new');
-        if (hasBadge) {
-            console.log('🔴 New appeal with badge');
-            return true;
+
+        // 2. Используем общие утилиты для проверки
+        const isNew = window.OmniChatUtils.isNewAppeal(element);
+        if (isNew) {
+            console.log('🔴 New appeal detected by shared utilities');
         }
-        
-        // 3. Проверяем классы
-        const className = element.className || '';
-        if (className.includes('unread') || className.includes('new')) {
-            console.log('📍 New appeal by class');
-            return true;
-        }
-        
-        return false;
+
+        return isNew;
     }
     
     // Визуальная пометка элемента
@@ -292,13 +318,22 @@ class SimplifiedAppealHandler {
     }
 }
 
-// Создаем экземпляр
-window.simplifiedHandler = new SimplifiedAppealHandler();
+// Создаем экземпляр с задержкой для правильной инициализации
+setTimeout(() => {
+    if (!window.simplifiedHandler) {
+        window.simplifiedHandler = new SimplifiedAppealHandler();
+        console.log('✅ Simplified Appeal Handler ready (delayed start)');
+        console.log('💓 Detection heartbeat will monitor system health every 35s');
+    } else {
+        console.log('⚠️ Simplified Appeal Handler already exists');
+    }
+}, 2000);
 
-console.log('✅ Simplified Appeal Handler ready');
+console.log('🔄 SimplifiedHandler starting in 2 seconds...');
 console.log('Commands:');
 console.log('  simplifiedHandler.toggleAutoResponse() - Toggle auto-response');
 console.log('  simplifiedHandler.checkForAppeals("manual") - Manual check');
+console.log('  simplifiedHandler.verifyDetectionActivity() - Check system health');
 console.log('  simplifiedHandler.getStats() - Get statistics');
 console.log('  unifiedCoordinator.getStats() - Coordinator stats');
 console.log('  unifiedCoordinator.reset() - Reset all data');
