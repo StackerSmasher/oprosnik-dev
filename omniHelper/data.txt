@@ -1,0 +1,117 @@
+🆕 NEW appeal detected by dom-observer: stable_5k6bbc
+omniChatAppelMonitor.js:894 🎉 NEW APPEAL DETECTED!
+omniChatAppelMonitor.js:895   ID: stable_5k6bbc
+omniChatAppelMonitor.js:896   Status: new
+omniChatAppelMonitor.js:897   Text preview: Тех.поддержка
+omniChatAppelMonitor.js:904 📝 AppealMonitor: New appeal detected, but NOT adding to queue to prevent duplication
+omniChatAppelMonitor.js:905     OmniAnalyzer will pick it up during periodic check
+omniChatAppelMonitor.js:906     Appeal ID: stable_5k6bbc Status: new
+omniChatAppelMonitor.js:409 🔍 Checking for appeals (source: dom-observer)
+omniChatAppelMonitor.js:394 📋 Final result: Found 1 appeals in sidebar
+omniChatAppelMonitor.js:401   1. Element: testid="appeal-preview" class="sc-dUHDFv eCsute..." size=268x92
+omniChatAppelMonitor.js:529 ⏰ AppealMonitor: Found timer in specific structure: 55 seconds
+omniChatAppelMonitor.js:575 🔥 Appeal has timer - marking as new: 55 seconds
+omniChatAppelMonitor.js:599 ⚠️ No ID found, using stable content-based ID: stable_5k6bbc
+omniChatAppelMonitor.js:314 ⏭️ Duplicate detection prevented: stable_5k6bbc by dom-observer (722ms ago)
+simplifiedHandler.js:41 💓 [20:15:44] Detection Heartbeat Check:
+simplifiedHandler.js:64 📊 Active detectors: 3
+simplifiedHandler.js:65    ✅ SimplifiedHandler (30s)
+simplifiedHandler.js:65    ✅ AppealMonitor (30s)
+simplifiedHandler.js:65    ✅ UnifiedCoordinator
+simplifiedHandler.js:72 ✅ Detection system healthy: 3 mechanisms active
+omniChatAppelMonitor.js:164 ⏰ [20:15:57] AppealMonitor: Starting periodic check (30s interval)
+omniChatAppelMonitor.js:409 🔍 Checking for appeals (source: appeal-monitor-30s)
+omniChatAppelMonitor.js:394 📋 Final result: Found 1 appeals in sidebar
+omniChatAppelMonitor.js:401   1. Element: testid="appeal-preview" class="sc-dUHDFv eCsute..." size=268x92
+omniChatAppelMonitor.js:529 ⏰ AppealMonitor: Found timer in specific structure: 36 seconds
+omniChatAppelMonitor.js:575 🔥 Appeal has timer - marking as new: 36 seconds
+omniChatAppelMonitor.js:599 ⚠️ No ID found, using stable content-based ID: stable_5k6bbc
+omniChatAppelMonitor.js:278 
+
+
+🔍 [20:18:24] SimplifiedHandler: Checking for appeals (source: periodic-60s)
+simplifiedHandler.js:181 📊 [20:18:24] Found 1 appeal elements on page
+simplifiedHandler.js:194 🎯 [20:18:24] Processing maximum 3 appeals to prevent system overload
+simplifiedHandler.js:203 ⚠️ Could not extract appeal info from element 1
+simplifiedHandler.js:256 📈 [20:18:24] Detection Summary:
+simplifiedHandler.js:257    - Elements scanned: 1
+simplifiedHandler.js:258    - New appeals found: 0
+simplifiedHandler.js:259    - Added to queue: 0
+simplifiedHandler.js:260    - Queue status: [object Object]
+simplifiedHandler.js:267 ✔️ [20:18:24] No new appeals detected - system operating normally
+omniChatAppelMonitor.js:409 🔍 Checking for appeals (source: periodic-60s)
+omniChatAppelMonitor.js:394 📋 Final result: Found 3 appeals in sidebar
+omniChatAppelMonitor.js:401   1. Element: testid="appeal-preview" class="sc-dUHDFv cAMVyq..." size=268x92
+omniChatAppelMonitor.js:401   2. Element: testid="null" class="sc-bWbSeO cWRtup..." size=535x30
+omniChatAppelMonitor.js:401   3. Element: testid="null" class="sc-bPWcZb fsZrK..." size=509x50
+omniChatAppelMonitor.js:599 ⚠️ No ID found, using stable content-based ID: stable_5k6bbc
+omniChatAppelMonitor.js:278 🔄 Appeal stable_5k6bbc detected by additional source: periodic-60s
+omniChatAppelMonitor.js:599 ⚠️ No ID found, using stable content-based ID: stable_1rm8p6
+omniChatAppelMonitor.js:278 🔄 Appeal stable_1rm8p6 detected by additional source: periodic-60s
+omniChatAppelMonitor.js:488 ✅ Found appeal ID in text: 6199056670
+omniChatAppelMonitor.js:278 🔄 Appeal 6199056670 detected by additional source: periodic-60s
+omniChatAppelMonitor.js:164 ⏰ [20:18:36] AppealMonitor: Starting periodic check (30s interval)
+omniChatAppelMonitor.js:409 🔍 Checking for appeals (source: appeal-monitor-30s)
+omniChatAppelMonitor.js:394 📋 Final result: Found 3 appeals in sidebar
+omniChatAppelMonitor.js:401   1. Element: testid="appeal-preview" class="sc-dUHDFv cAMVyq..." size=268x92
+omniChatAppelMonitor.js:401   2. Element: testid="null" class="sc-bWbSeO cWRtup..." size=535x30
+omniChatAppelMonitor.js:401   3. Element: testid="null" class="sc-bPWcZb fsZrK..." size=509x50
+omniChatAppelMonitor.js:599 ⚠️ No ID found, using stable content-based ID: stable_5k6bbc
+omniChatAppelMonitor.js:278 🔄 Appeal stable_5k6bbc detected by additional source: appeal-monitor-30s
+omniChatAppelMonitor.js:599 ⚠️ No ID found, using stable content-based ID: stable_1rm8p6
+omniChatAppelMonitor.js:278 🔄 Appeal stable_1rm8p6 detected by additional source: appeal-monitor-30s
+omniChatAppelMonitor.js:488 ✅ Found appeal ID in text: 6199056670
+omniChatAppelMonitor.js:278 🔄 Appeal 6199056670 detected by additional source: appeal-monitor-30s
+simplifiedHandler.js:41 💓 [20:18:36] Detection Heartbeat Check:
+simplifiedHandler.js:64 📊 Active detectors: 3
+simplifiedHandler.js:65    ✅ SimplifiedHandler (30s)
+simplifiedHandler.js:65    ✅ AppealMonitor (30s)
+simplifiedHandler.js:65    ✅ UnifiedCoordinator
+simplifiedHandler.js:72 ✅ Detection system healthy: 3 mechanisms active
+simplifiedHandler.js:41 💓 [20:18:39] Detection Heartbeat Check:
+simplifiedHandler.js:64 📊 Active detectors: 3
+simplifiedHandler.js:65    ✅ SimplifiedHandler (30s)
+simplifiedHandler.js:65    ✅ AppealMonitor (30s)
+simplifiedHandler.js:65    ✅ UnifiedCoordinator
+simplifiedHandler.js:72 ✅ Detection system healthy: 3 mechanisms active
+content.js:259 ⏭️ Element already processed or invalid
+omniChatAppelMonitor.js:99 🔍 DOM Observer detected 1 new appeal elements
+omniChatAppelMonitor.js:529 ⏰ AppealMonitor: Found timer in specific structure: 58 seconds
+omniChatAppelMonitor.js:575 🔥 Appeal has timer - marking as new: 58 seconds
+omniChatAppelMonitor.js:599 ⚠️ No ID found, using stable content-based ID: stable_sckjrc
+omniChatAppelMonitor.js:275 🔍 Appeal stable_sckjrc detected by dom-observer
+omniChatAppelMonitor.js:285 🆕 NEW appeal detected by dom-observer: stable_sckjrc
+omniChatAppelMonitor.js:894 🎉 NEW APPEAL DETECTED!
+omniChatAppelMonitor.js:895   ID: stable_sckjrc
+omniChatAppelMonitor.js:896   Status: new
+omniChatAppelMonitor.js:897   Text preview: Тех.поддержка
+omniChatAppelMonitor.js:904 📝 AppealMonitor: New appeal detected, but NOT adding to queue to prevent duplication
+omniChatAppelMonitor.js:905     OmniAnalyzer will pick it up during periodic check
+omniChatAppelMonitor.js:906     Appeal ID: stable_sckjrc Status: new
+omniChatAppelMonitor.js:409 🔍 Checking for appeals (source: dom-observer)
+omniChatAppelMonitor.js:394 📋 Final result: Found 3 appeals in sidebar
+omniChatAppelMonitor.js:401   1. Element: testid="appeal-preview" class="sc-dUHDFv eCsute..." size=268x92
+omniChatAppelMonitor.js:401   2. Element: testid="appeal-preview" class="sc-dUHDFv cAMVyq..." size=268x92
+omniChatAppelMonitor.js:401   3. Element: testid="null" class="sc-bWbSeO cWRtup..." size=535x30
+omniChatAppelMonitor.js:529 ⏰ AppealMonitor: Found timer in specific structure: 58 seconds
+omniChatAppelMonitor.js:575 🔥 Appeal has timer - marking as new: 58 seconds
+omniChatAppelMonitor.js:599 ⚠️ No ID found, using stable content-based ID: stable_sckjrc
+omniChatAppelMonitor.js:314 ⏭️ Duplicate detection prevented: stable_sckjrc by dom-observer (522ms ago)
+omniChatAppelMonitor.js:599 ⚠️ No ID found, using stable content-based ID: stable_5k6bbc
+omniChatAppelMonitor.js:278 🔄 Appeal stable_5k6bbc detected by additional source: dom-observer
+omniChatAppelMonitor.js:599 ⚠️ No ID found, using stable content-based ID: stable_1rm8p6
+omniChatAppelMonitor.js:278 🔄 Appeal stable_1rm8p6 detected by additional source: dom-observer
+omniChatAppelMonitor.js:164 ⏰ [20:18:57] AppealMonitor: Starting periodic check (30s interval)
+omniChatAppelMonitor.js:409 🔍 Checking for appeals (source: appeal-monitor-30s)
+omniChatAppelMonitor.js:394 📋 Final result: Found 3 appeals in sidebar
+omniChatAppelMonitor.js:401   1. Element: testid="appeal-preview" class="sc-dUHDFv eCsute..." size=268x92
+omniChatAppelMonitor.js:401   2. Element: testid="appeal-preview" class="sc-dUHDFv cAMVyq..." size=268x92
+omniChatAppelMonitor.js:401   3. Element: testid="null" class="sc-bWbSeO cWRtup..." size=535x30
+omniChatAppelMonitor.js:529 ⏰ AppealMonitor: Found timer in specific structure: 45 seconds
+omniChatAppelMonitor.js:575 🔥 Appeal has timer - marking as new: 45 seconds
+omniChatAppelMonitor.js:599 ⚠️ No ID found, using stable content-based ID: stable_sckjrc
+omniChatAppelMonitor.js:278 🔄 Appeal stable_sckjrc detected by additional source: appeal-monitor-30s
+omniChatAppelMonitor.js:599 ⚠️ No ID found, using stable content-based ID: stable_5k6bbc
+omniChatAppelMonitor.js:278 🔄 Appeal stable_5k6bbc detected by additional source: appeal-monitor-30s
+omniChatAppelMonitor.js:599 ⚠️ No ID found, using stable content-based ID: stable_1rm8p6
+omniChatAppelMonitor.js:278 🔄 Appeal stable_1rm8p6 detected by additional source: appeal-monitor-30s
