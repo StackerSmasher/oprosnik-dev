@@ -33,10 +33,11 @@
         "*://omnichat.rt.ru/*",
         "*://*.omnichat.rt.ru/*"
       ],
-      "js": ["greetingTracker.js", 
+      "js": ["sharedUtils.js",
+            "greetingTracker.js",
+            "templateProcessor.js",
             "unifiedCoordinator.js",
             "simplifiedHandler.js",
-            "greetingTracker.js",
             "content.js",
             "omniChatAppelMonitor.js",
             "test-helper.js"],

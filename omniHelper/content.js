@@ -112,14 +112,15 @@ class OmniChatTrafficAnalyzer {
     init() {
         console.log('🚀 OmniChat Traffic Analyzer v4.0 initialized');
         console.log('📍 Current URL:', window.location.href);
-        
+        console.log('⚠️ OmniChatTrafficAnalyzer detection disabled - using SimplifiedHandler');
+
         this.loadSettings();
         this.injectMainWorldScript();
         this.setupMessageListener();
         this.setupDOMObserver();
-        // this.setupAppealDetection();
+        // this.setupAppealDetection(); // DISABLED: Using SimplifiedHandler instead
         this.startPeriodicSync();
-        // this.startPeriodicAppealCheck(); // Новая периодическая проверка
+        // this.startPeriodicAppealCheck(); // DISABLED: Using SimplifiedHandler instead
         this.startPeriodicCleanup(); // Периодическая очистка старых данных
         this.exposeDebugInterface();
     }

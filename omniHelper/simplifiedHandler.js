@@ -6,7 +6,8 @@ class SimplifiedAppealHandler {
         this.autoResponseEnabled = true;
         this.domObserver = null;
         this.lastCheck = 0;
-        this.checkInterval = 30000; // 30 секунд между проверками для гарантированного покрытия
+        this.checkInterval = 60000; // 60 секунд между проверками для гарантированного покрытия
+        this.lastProcessingTime = 0; // Track last processing time for minimum delay
         
         this.init();
     }
@@ -149,14 +150,14 @@ class SimplifiedAppealHandler {
     // Периодическая проверка
     periodicCheck() {
         const now = Date.now();
-        if (now - this.lastCheck < 25000) return; // Не чаще раза в 25 секунд (защита от спама)
+        if (now - this.lastCheck < 55000) return; // Не чаще раза в 55 секунд (защита от спама)
 
         this.lastCheck = now;
-        console.log('⏰ SimplifiedHandler: Starting periodic check (30s interval)');
-        this.checkForAppeals('periodic-30s');
+        console.log('⏰ SimplifiedHandler: Starting periodic check (60s interval)');
+        this.checkForAppeals('periodic-60s');
     }
     
-    // Основной метод проверки обращений
+    // Основной метод проверки обращений с throttling
     async checkForAppeals(source) {
         const timestamp = new Date().toLocaleTimeString();
         console.log(`🔍 [${timestamp}] SimplifiedHandler: Checking for appeals (source: ${source})`);
@@ -164,6 +165,15 @@ class SimplifiedAppealHandler {
         if (!this.autoResponseEnabled) {
             console.log('🚫 Auto-response disabled - skipping check');
             return;
+        }
+
+        // Минимум 5 секунд между обработками для предотвращения перегрузки системы
+        const now = Date.now();
+        const timeSinceLastProcessing = now - this.lastProcessingTime;
+        if (timeSinceLastProcessing < 5000) {
+            const waitTime = 5000 - timeSinceLastProcessing;
+            console.log(`⏳ [${timestamp}] Throttling: Waiting ${Math.round(waitTime/1000)}s since last processing`);
+            await this.wait(waitTime);
         }
 
         // Находим все элементы обращений
@@ -178,6 +188,10 @@ class SimplifiedAppealHandler {
         let addedCount = 0;
         let processedCount = 0;
         let newAppealsFound = 0;
+        const maxAppealsToProcess = 3; // Максимум 3 обращения за раз
+        let appealsProcessedThisRound = 0;
+
+        console.log(`🎯 [${timestamp}] Processing maximum ${maxAppealsToProcess} appeals to prevent system overload`);
 
         for (const element of appealElements) {
             processedCount++;
@@ -199,6 +213,12 @@ class SimplifiedAppealHandler {
             newAppealsFound++;
             console.log(`🆕 New appeal detected: ${appealInfo.id} (${newAppealsFound}/${appealElements.length})`);
 
+            // Проверяем лимит обработки за раз
+            if (appealsProcessedThisRound >= maxAppealsToProcess) {
+                console.log(`⚠️ [${timestamp}] Reached maximum appeals limit (${maxAppealsToProcess}) for this round - remaining appeals will be processed in next cycle`);
+                break;
+            }
+
             // Используем единый координатор для проверки и добавления
             if (window.unifiedCoordinator) {
                 const added = await window.unifiedCoordinator.addToQueue(
@@ -209,10 +229,17 @@ class SimplifiedAppealHandler {
 
                 if (added) {
                     addedCount++;
-                    console.log(`✅ Successfully added to queue: ${appealInfo.id}`);
+                    appealsProcessedThisRound++;
+                    console.log(`✅ Successfully added to queue: ${appealInfo.id} (${appealsProcessedThisRound}/${maxAppealsToProcess})`);
 
                     // Визуальная индикация
                     this.markElementAsQueued(element);
+
+                    // Задержка между обработками для дачи времени UI на обновление
+                    if (appealsProcessedThisRound < maxAppealsToProcess && newAppealsFound < appealElements.length) {
+                        console.log(`⏳ [${timestamp}] Waiting 2s before processing next appeal...`);
+                        await this.wait(2000);
+                    }
                 } else {
                     console.log(`⏭️ Appeal ${appealInfo.id} rejected by coordinator (likely duplicate)`);
                 }
@@ -221,6 +248,9 @@ class SimplifiedAppealHandler {
                 break;
             }
         }
+
+        // Обновляем время последней обработки
+        this.lastProcessingTime = Date.now();
 
         // Детальная статистика
         console.log(`📈 [${timestamp}] Detection Summary:`);
@@ -308,13 +338,18 @@ class SimplifiedAppealHandler {
     
     // Статистика
     getStats() {
-        const coordinatorStats = window.unifiedCoordinator ? 
+        const coordinatorStats = window.unifiedCoordinator ?
             window.unifiedCoordinator.getStats() : {};
-        
+
         return {
             autoResponseEnabled: this.autoResponseEnabled,
             ...coordinatorStats
         };
+    }
+
+    // Утилита для задержек
+    wait(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 }
 
