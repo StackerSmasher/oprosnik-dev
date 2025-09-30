@@ -8,7 +8,11 @@ class SimplifiedAppealHandler {
         this.lastCheck = 0;
         this.checkInterval = 60000; // 60 секунд между проверками для гарантированного покрытия
         this.lastProcessingTime = 0; // Track last processing time for minimum delay
-        
+
+        // Кэш для стабильных ID элементов
+        this.elementToIdCache = new WeakMap();
+        this.contentToIdCache = new Map();
+
         this.init();
     }
     
@@ -275,8 +279,47 @@ class SimplifiedAppealHandler {
     
     // Извлечение информации об обращении
     extractAppealInfo(element) {
+        let id = window.OmniChatUtils.extractAppealId(element);
+
+        // Если ID не найден, создаем стабильный ID на основе контента
+        if (!id) {
+            // Проверяем кэш элементов - если для этого элемента уже создавали ID, используем его
+            if (this.elementToIdCache.has(element)) {
+                id = this.elementToIdCache.get(element);
+                console.log('♻️ SimplifiedHandler: Using cached ID for element:', id);
+            } else {
+                const allText = window.OmniChatUtils.getTextContent(element);
+
+                // Извлекаем имя клиента
+                const nameElement = element.querySelector('.sc-hSWyVn.jLoqEI, [title]');
+                const name = nameElement ? (nameElement.textContent?.trim() || nameElement.getAttribute('title')) : null;
+
+                // Создаем стабильный контент (убираем изменяющиеся части)
+                const stableContent = this.extractStableContent(element, name, allText);
+
+                // Проверяем кэш контента - возможно этот контент уже видели
+                if (this.contentToIdCache.has(stableContent)) {
+                    id = this.contentToIdCache.get(stableContent);
+                    console.log('♻️ SimplifiedHandler: Using cached ID for content:', id);
+                } else {
+                    // Используем ТУ ЖЕ хэш-функцию, что и normalizeAppealId
+                    // Создаем хэш один раз - normalizeAppealId теперь не будет перехэшировать короткие ID
+                    id = window.OmniChatUtils.hashString(stableContent);
+                    console.log('⚠️ SimplifiedHandler: No ID found, creating stable ID:', id);
+                    console.log('   📝 Name:', name || 'none');
+                    console.log('   📝 Stable content:', stableContent.substring(0, 100));
+
+                    // Сохраняем в кэш контента
+                    this.contentToIdCache.set(stableContent, id);
+                }
+
+                // Сохраняем в кэш элементов
+                this.elementToIdCache.set(element, id);
+            }
+        }
+
         const info = {
-            id: window.OmniChatUtils.extractAppealId(element),
+            id: id,
             hasTimer: false,
             timerSeconds: null
         };
@@ -294,11 +337,74 @@ class SimplifiedAppealHandler {
 
         return info;
     }
+
+    // Извлечение стабильного контента (без изменяющихся частей)
+    extractStableContent(element, name, allText) {
+        const stableParts = [];
+
+        // 1. КРИТИЧНО: Имя клиента - самая стабильная часть
+        if (name && name !== 'Unknown') {
+            const cleanName = name.replace(/\s+/g, '_').toLowerCase();
+            stableParts.push(`name:${cleanName}`);
+        }
+
+        // 2. Убираем ВСЕ изменяющиеся части
+        const cleanText = allText
+            .replace(/\d{1,2}:\d{2}/g, '')           // Время 12:34
+            .replace(/\d{1,2}\.\d{2}\.\d{4}/g, '')  // Даты 01.01.2024
+            .replace(/\d+\s*(мин|сек|час)/gi, '')   // Таймеры
+            .replace(/\d+\s*(минут|секунд|часов)/gi, '') // Таймеры длинные
+            .replace(/только что|сейчас/gi, '')     // "только что"
+            .replace(/вчера|сегодня|завтра/gi, '')  // Относительные даты
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        // 3. Берем ТОЛЬКО первые 3-4 значимых слова (самые стабильные)
+        // Это обычно название/тема чата, которое не меняется
+        const significantWords = cleanText
+            .split(' ')
+            .filter(word => {
+                if (word.length <= 2) return false;
+                // Исключаем служебные слова
+                const excludeWords = ['Шаблоны', 'ответов', 'Категории', 'для', 'что', 'как', 'это'];
+                return !excludeWords.includes(word);
+            })
+            .slice(0, 4)  // Только первые 4 слова
+            .join('_')
+            .toLowerCase();
+
+        if (significantWords) {
+            stableParts.push(`text:${significantWords}`);
+        }
+
+        // 4. Если ничего не нашли - используем data-атрибуты или ID родителя
+        if (stableParts.length === 0) {
+            const dataId = element.dataset?.appealId || element.dataset?.chatId;
+            if (dataId) {
+                stableParts.push(`data:${dataId}`);
+            } else if (element.id) {
+                stableParts.push(`elemid:${element.id}`);
+            }
+        }
+
+        return stableParts.join('|') || 'unknown';
+    }
+
+    // Простая хэш-функция для генерации стабильного ID
+    simpleHash(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash;
+        }
+        return Math.abs(hash).toString(36).substring(0, 6);
+    }
     
     // Проверка, новое ли обращение
     isNewAppeal(element, appealInfo) {
-        // 1. Если есть таймер < 30 секунд - точно новое
-        if (appealInfo.hasTimer && appealInfo.timerSeconds < 30) {
+        // 1. Если есть таймер < 60 секунд - точно новое
+        if (appealInfo.hasTimer && appealInfo.timerSeconds < 60) {
             console.log(`⏰ New appeal with timer: ${appealInfo.timerSeconds}s`);
             return true;
         }

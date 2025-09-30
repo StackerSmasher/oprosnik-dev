@@ -160,14 +160,15 @@ class UnifiedProcessingCoordinator {
         while (this.processingQueue.length > 0) {
             const item = this.processingQueue.shift();
             this.currentlyProcessing = item.appealId;
-            
+            const lockKey = `processing_lock_${item.appealId}`;
+
             try {
                 console.log('🤖 Processing appeal:', item.appealId);
-                
+
                 // ЗДЕСЬ ВЫЗОВ РЕАЛЬНОЙ ОБРАБОТКИ
                 // Замените на ваш метод отправки шаблона
                 const success = await this.sendTemplateToAppeal(item);
-                
+
                 if (success) {
                     // Помечаем как обработанное
                     await this.markAsProcessed(item.appealId, item.element, 'success');
@@ -175,16 +176,17 @@ class UnifiedProcessingCoordinator {
                     // При неудаче тоже помечаем, чтобы не спамить
                     await this.markAsProcessed(item.appealId, item.element, 'failed');
                 }
-                
+
             } catch (error) {
                 console.error('❌ Processing error:', error);
                 // При ошибке тоже помечаем как обработанное
                 await this.markAsProcessed(item.appealId, item.element, 'error');
+            } finally {
+                // ИСПРАВЛЕНО: Всегда очищаем блокировку, даже при ошибках
+                localStorage.removeItem(lockKey);
+                console.log(`🔓 Released processing lock for: ${item.appealId}`);
             }
-            
-            // Очищаем блокировку
-            localStorage.removeItem(`processing_lock_${item.appealId}`);
-            
+
             // Задержка между обработками
             await new Promise(resolve => setTimeout(resolve, this.config.processDelay));
         }
@@ -292,17 +294,16 @@ class UnifiedProcessingCoordinator {
         // Сохраняем в память
         this.processedAppeals.set(normalizedId, info);
 
-        // Сохраняем в GreetingTracker
+        // Сохраняем в GreetingTracker (только при успехе)
         if (window.greetingTracker && status === 'success') {
             await window.greetingTracker.markAsGreeted(element, normalizedId, 'Template sent');
         }
 
-        // Сохраняем факт приветствия в localStorage для persistence across page reloads
-        if (status === 'success') {
-            const greetedKey = `greeted_${normalizedId}`;
-            localStorage.setItem(greetedKey, timestamp.toString());
-            console.log(`📝 Stored greeting timestamp for ${normalizedId} in localStorage`);
-        }
+        // ИСПРАВЛЕНО: Сохраняем факт обработки в localStorage для ВСЕХ статусов
+        // Это предотвращает бесконечную отправку при ошибках
+        const greetedKey = `greeted_${normalizedId}`;
+        localStorage.setItem(greetedKey, timestamp.toString());
+        console.log(`📝 Stored processing timestamp for ${normalizedId} in localStorage (status: ${status})`);
 
         // Сохраняем в localStorage
         this.saveState();
@@ -708,6 +709,44 @@ window.unifiedCoordinator = new UnifiedProcessingCoordinator();
 setInterval(() => {
     window.unifiedCoordinator.cleanup();
 }, 30 * 60 * 1000);
+
+// КРИТИЧЕСКИ ВАЖНО: Периодическая проверка новых обращений из глобального трекинга
+setInterval(() => {
+    if (!window.OmniChatGlobalTracking || !window.OmniChatGlobalTracking.appeals) {
+        return;
+    }
+
+    console.log('🔍 [UnifiedCoordinator] Periodic check for new appeals...');
+
+    const globalAppeals = window.OmniChatGlobalTracking.appeals;
+    let addedCount = 0;
+
+    for (const [appealId, appealData] of globalAppeals.entries()) {
+        // Проверяем только новые обращения
+        if (appealData.status === 'new') {
+            const normalizedId = window.unifiedCoordinator.normalizeId(appealId);
+
+            // Проверяем, можно ли обработать
+            if (window.unifiedCoordinator.canProcessAppeal(appealId, null)) {
+                console.log(`📥 [UnifiedCoordinator] Adding new appeal to queue: ${normalizedId}`);
+
+                // Добавляем в очередь
+                window.unifiedCoordinator.addToQueue(appealId, null, 'periodic-coordinator-check');
+                addedCount++;
+
+                // Обновляем статус в глобальном трекинге
+                appealData.status = 'queued';
+                appealData.queuedAt = Date.now();
+            }
+        }
+    }
+
+    if (addedCount > 0) {
+        console.log(`✅ [UnifiedCoordinator] Added ${addedCount} new appeals to processing queue`);
+    } else {
+        console.log('✔️ [UnifiedCoordinator] No new appeals to process');
+    }
+}, 10000); // Проверка каждые 10 секунд
 
 console.log('✅ Unified Processing Coordinator initialized');
 console.log('📊 Stats:', window.unifiedCoordinator.getStats());

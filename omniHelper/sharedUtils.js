@@ -229,6 +229,12 @@ class OmniChatUtils {
             return numMatch[0];
         }
 
+        // ИСПРАВЛЕНИЕ: Если ID уже выглядит как хэш (короткая буквенно-цифровая строка 1-15 символов),
+        // не хэшируем повторно, чтобы избежать бесконечного перехэширования
+        if (normalized.length >= 1 && normalized.length <= 15 && /^[a-z0-9]+$/.test(normalized)) {
+            return normalized;
+        }
+
         // If no numerical ID, use hash of content
         if (normalized.length > 0) {
             return this.hashString(normalized);

@@ -1,71 +1,747 @@
-// templateProcessor.js - Dedicated template processing module
-// Single responsibility: Handle template selection and sending
-// No dependencies on other OmniChat modules
+// templateProcessor.js - Advanced template processing with intelligent appeal detection
+// Handles template selection, sending, and smart new appeal identification
+// Integrated with OmniChatUtils for shared functionality
 
 class TemplateProcessor {
     constructor() {
-        this.templateConfig = {
+        this.config = {
             responseDelay: 2000,
             clickDelay: 500,
             templateText: 'Добрый день! Запрос принят в работу',
             templateTitle: '1.1 Приветствие',
             maxRetries: 3,
-            cooldownPeriod: 24 * 60 * 60 * 1000
+            cooldownPeriod: 24 * 60 * 60 * 1000,
+            waitForTemplatesTimeout: 3000,
+            clickTimeout: 1000
+        };
+
+        // Time scoring weights for appeal freshness analysis
+        this.timeScoring = {
+            timer: { base: 1500, decay: 1 },
+            immediate: { score: 1000 },
+            seconds: { base: 1200, decay: 1 },
+            minutes: { base: 950, decay: 2 },
+            hours: { base: 700, decay: 50 },
+            today: { recent: 900, hours: 750, old: 400 },
+            yesterday: { score: 200 },
+            marked_new: { score: 800 },
+            recent_generic: { score: 750 },
+            default: { score: 300 }
+        };
+
+        // DOM scoring weights for visual freshness indicators
+        this.domScoring = {
+            highlighted: 200,
+            colored_background: 150,
+            animated: 300,
+            new_class: 250,
+            top_position: 100,
+            fresh_data_attr: 180,
+            omnichat_fresh: 50,
+            large_element: 30,
+            rich_content: 40
+        };
+
+        // Consolidated DOM selectors
+        this.selectors = {
+            appeals: {
+                preview: 'div[data-testid="appeal-preview"]',
+                newIndicators: [
+                    'div[data-testid="appeal-preview"]:has([class*="new"])',
+                    'div[data-testid="appeal-preview"]:has([class*="unread"])',
+                    'div[data-testid="appeal-preview"]:has([class*="highlight"])',
+                    'div[data-testid="appeal-preview"]:has(.notification)',
+                    'div[data-testid="appeal-preview"][class*="highlight"]',
+                    'div[data-testid="appeal-preview"][style*="background"]'
+                ],
+                timeIndicators: [
+                    'div[data-testid="appeal-preview"]:has(div[title*="только что"])',
+                    'div[data-testid="appeal-preview"]:has(div[title*="сейчас"])',
+                    'div[data-testid="appeal-preview"]:has(div[title*="минут"])'
+                ]
+            },
+            templates: {
+                button: [
+                    'button[data-testid="choose-templates"]',
+                    'button[data-testid*="template"]',
+                    'button[title*="Шаблон"]',
+                    'button[title*="шаблон"]',
+                    'button[aria-label*="шаблон"]'
+                ],
+                list: 'div[data-testid="reply-template"]',
+                greeting: ['Приветствие', 'Добрый день', '1.1']
+            },
+            messaging: {
+                input: [
+                    'textarea',
+                    '[contenteditable="true"]',
+                    'div[role="textbox"]',
+                    '[data-testid="message-input"]'
+                ],
+                send: [
+                    'button[title="Отправить"]',
+                    'button[title="Отправить сообщение"]',
+                    'button[aria-label*="Send"]',
+                    'button[aria-label*="Отправить"]',
+                    'button[type="submit"]:not([disabled])'
+                ]
+            }
         };
     }
 
-    // Main processing method - called by UnifiedCoordinator
+    // ===== MAIN PROCESSING PIPELINE =====
     async processAppeal(appealData) {
-        console.log('🎯 TemplateProcessor: Starting appeal processing:', appealData.appealId);
+        this._logProcess('Main', 'Starting appeal processing', appealData?.appealId);
 
         try {
-            // Validate environment
-            if (!window.location.href.includes('omnichat.rt.ru')) {
-                throw new Error('Not on OmniChat page');
-            }
+            this._validateEnvironment();
 
-            // Step 1: Select appeal (if element available)
-            if (appealData.element && document.contains(appealData.element)) {
-                console.log('👆 Selecting appeal element...');
-                const selected = await this.selectAppeal(appealData);
-                if (!selected) {
-                    throw new Error('Failed to select appeal');
+            // Step 1: Appeal Selection - ИСПРАВЛЕНО: используем переданный element
+            let appealSelected = false;
+
+            if (appealData?.element && document.contains(appealData.element)) {
+                // Если передан элемент - кликаем на него напрямую
+                this._logProcess('Selection', 'Using provided appeal element:', appealData.appealId);
+                appealData.element.click();
+                await this.wait(this.config.clickDelay);
+                appealSelected = this.isChatUIOpen();
+
+                if (appealSelected) {
+                    this._logSuccess('Appeal chat opened successfully from provided element');
+                } else {
+                    this._logWarning('Click on provided element did not open chat, trying fallback');
                 }
-                await this.wait(2000);
             } else {
-                console.log('⚠️ No DOM element provided, proceeding with template operations');
+                this._logProcess('Selection', 'No appeal element provided, searching for new appeals');
             }
 
-            // Step 2: Open template selector
-            console.log('📋 Opening template selector...');
-            const templateOpened = await this.openTemplateSelector();
-            if (!templateOpened) {
-                throw new Error('Failed to open template selector');
-            }
-            await this.wait(1000);
-
-            // Step 3: Select template
-            console.log('✅ Selecting greeting template...');
-            const templateSelected = await this.selectTemplate();
-            if (!templateSelected) {
-                throw new Error('Failed to select template');
-            }
-            await this.wait(1000);
-
-            // Step 4: Send message
-            console.log('📤 Sending template message...');
-            const messageSent = await this.sendTemplateMessage();
-            if (!messageSent) {
-                throw new Error('Failed to send template message');
+            // Если элемента нет или клик не сработал - ищем новое обращение
+            if (!appealSelected) {
+                appealSelected = await this._handleAppealSelection();
+                if (!appealSelected && !this.isChatUIOpen()) {
+                    throw new Error('No appeals available and no chat open');
+                }
             }
 
-            console.log('✅ TemplateProcessor: Successfully processed appeal:', appealData.appealId);
+            await this.wait(this.config.responseDelay);
+
+            // Step 2: Template Operations
+            await this._executeTemplateWorkflow();
+
+            this._logSuccess('Appeal processed successfully', appealData?.appealId);
+
+            // Обновляем статус в глобальном трекинге при успехе
+            this._updateGlobalTrackingStatus(appealData?.appealId, 'processed', true);
+
             return true;
 
         } catch (error) {
-            console.error('❌ TemplateProcessor: Processing failed:', error.message);
+            this._logError('Processing failed', error.message);
+
+            // Обновляем статус в глобальном трекинге при ошибке
+            this._updateGlobalTrackingStatus(appealData?.appealId, 'error', false, error.message);
+
             return false;
         }
+    }
+
+    // Обновление статуса в глобальном трекинге
+    _updateGlobalTrackingStatus(appealId, status, success, errorMessage = null) {
+        if (!appealId || !window.OmniChatGlobalTracking) {
+            return;
+        }
+
+        const globalAppeals = window.OmniChatGlobalTracking.appeals;
+        if (globalAppeals && globalAppeals.has(appealId)) {
+            const appealData = globalAppeals.get(appealId);
+            appealData.status = status;
+            appealData.processedAt = Date.now();
+
+            if (success) {
+                appealData.successCount = (appealData.successCount || 0) + 1;
+                console.log(`✅ Updated global tracking for ${appealId}: ${status}`);
+            } else {
+                appealData.errorCount = (appealData.errorCount || 0) + 1;
+                appealData.lastError = errorMessage;
+                console.log(`❌ Updated global tracking for ${appealId}: ${status} (${errorMessage})`);
+            }
+        }
+    }
+
+    _validateEnvironment() {
+        if (!window.location.href.includes('omnichat.rt.ru')) {
+            throw new Error('Not on OmniChat page');
+        }
+    }
+
+    async _handleAppealSelection() {
+        this._logProcess('Selection', 'Looking for new appeals');
+        const selected = await this.selectNewAppeal();
+        if (!selected) {
+            this._logWarning('No new appeals found, checking chat state');
+        }
+        return selected;
+    }
+
+    async _executeTemplateWorkflow() {
+        // Open template selector
+        this._logProcess('Template', 'Opening template selector');
+        const templateOpened = await this.openTemplateSelector();
+        if (!templateOpened) {
+            throw new Error('Failed to open template selector');
+        }
+        await this.wait(this.config.clickTimeout);
+
+        // Select template
+        this._logProcess('Template', 'Selecting greeting template');
+        const templateSelected = await this.selectTemplate();
+        if (!templateSelected) {
+            throw new Error('Failed to select template');
+        }
+        await this.wait(this.config.clickTimeout);
+
+        // Send message
+        this._logProcess('Send', 'Sending template message');
+        const messageSent = await this.sendTemplateMessage();
+        if (!messageSent) {
+            throw new Error('Failed to send template message');
+        }
+    }
+
+    // ===== APPEAL SELECTION SYSTEM =====
+    async selectNewAppeal() {
+        this._logProcess('Selection', 'Starting smart appeal detection');
+
+        try {
+            // Strategy 1: Visual indicators
+            const visuallyNew = await this._selectByVisualIndicators();
+            if (visuallyNew) return true;
+
+            // Strategy 2: Time-based analysis
+            const timeBasedNew = await this._selectByTimeAnalysis();
+            if (timeBasedNew) return true;
+
+            // Strategy 3: Unprocessed content
+            const unprocessedNew = await this._selectUnprocessedAppeals();
+            if (unprocessedNew) return true;
+
+            // Strategy 4: Fallback
+            return await this._selectFallbackAppeal();
+
+        } catch (error) {
+            this._logError('Appeal selection failed', error.message);
+            return false;
+        }
+    }
+
+    async _selectByVisualIndicators() {
+        this._logProcess('Selection', 'Strategy 1: Visual indicators');
+
+        const allIndicators = [
+            ...this.selectors.appeals.newIndicators,
+            ...this.selectors.appeals.timeIndicators
+        ];
+
+        for (const selector of allIndicators) {
+            const elements = this._findElementsWithIndicators(selector);
+            if (elements.length > 0) {
+                this._logDebug(`Found ${elements.length} appeals with indicators`);
+
+                const success = await this._tryClickAppeal(elements[0], 'visual indicator');
+                if (success) {
+                    this._logSuccess('Appeal selected via visual indicators');
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    async _selectByTimeAnalysis() {
+        this._logProcess('Selection', 'Strategy 2: Time-based analysis');
+        const recentAppeals = await this.findMostRecentAppeals();
+
+        for (const appeal of recentAppeals) {
+            this._logDebug(`Trying recent appeal: "${appeal.text.substring(0, 50)}..."`);
+            const success = await this._tryClickAppeal(appeal.element, 'time analysis');
+            if (success) {
+                this._logSuccess('Appeal selected via time analysis');
+                return true;
+            }
+        }
+        return false;
+    }
+
+    async _selectUnprocessedAppeals() {
+        this._logProcess('Selection', 'Strategy 3: Unprocessed appeals');
+        const unprocessedAppeals = await this.findUnprocessedAppeals();
+
+        for (const appeal of unprocessedAppeals) {
+            this._logDebug(`Trying unprocessed appeal: "${appeal.text.substring(0, 50)}..."`);
+            const success = await this._tryClickAppeal(appeal.element, 'unprocessed');
+            if (success) {
+                this._logSuccess('Appeal selected as unprocessed');
+                return true;
+            }
+        }
+        return false;
+    }
+
+    async _selectFallbackAppeal() {
+        this._logProcess('Selection', 'Strategy 4: Fallback selection');
+        const allAppeals = document.querySelectorAll(this.selectors.appeals.preview);
+
+        for (let i = 0; i < Math.min(3, allAppeals.length); i++) {
+            const appeal = allAppeals[i];
+            if (appeal.offsetParent !== null) {
+                this._logDebug(`Trying fallback appeal ${i + 1}`);
+                const success = await this._tryClickAppeal(appeal, `fallback ${i + 1}`);
+                if (success) {
+                    this._logSuccess(`Fallback appeal ${i + 1} selected`);
+                    return true;
+                }
+            }
+        }
+
+        this._logWarning('No appeals found or selected');
+        return false;
+    }
+
+    async _tryClickAppeal(element, context) {
+        const clicked = await this.performAdvancedClick(element, context);
+        if (clicked) {
+            await this.wait(this.config.clickTimeout);
+            return this.isChatUIOpen();
+        }
+        return false;
+    }
+
+    _findElementsWithIndicators(selector) {
+        try {
+            if (selector.includes(':has(')) {
+                const baseSelector = selector.split(':has(')[0];
+                const hasContent = selector.match(/:has\(([^)]+)\)/)?.[1];
+                const baseElements = document.querySelectorAll(baseSelector);
+                return Array.from(baseElements).filter(el => {
+                    return hasContent ? el.querySelector(hasContent) !== null : true;
+                });
+            }
+            return Array.from(document.querySelectorAll(selector));
+        } catch (error) {
+            this._logWarning(`Selector error: ${selector}`, error.message);
+            return [];
+        }
+    }
+
+    // Enhanced method to find most recent appeals with comprehensive analysis
+    async findMostRecentAppeals() {
+        console.log('⏰ [findMostRecentAppeals] Starting comprehensive time analysis...');
+
+        const allAppeals = Array.from(document.querySelectorAll('div[data-testid="appeal-preview"]'));
+        const appealsWithTime = [];
+
+        console.log(`🔍 [findMostRecentAppeals] Analyzing ${allAppeals.length} appeal elements...`);
+
+        for (let i = 0; i < allAppeals.length; i++) {
+            const appealEl = allAppeals[i];
+            if (appealEl.offsetParent === null) {
+                console.log(`👻 [findMostRecentAppeals] Appeal ${i + 1} is hidden, skipping`);
+                continue;
+            }
+
+            const text = appealEl.textContent || '';
+            const classes = appealEl.className || '';
+
+            // Extract comprehensive time information
+            const timeInfo = this.extractTimeFromAppeal(text);
+
+            // Additional DOM-based freshness indicators
+            const domFreshness = this.analyzeDOMFreshness(appealEl);
+
+            // Combine time score with DOM freshness
+            const combinedScore = timeInfo.score + domFreshness.score;
+
+            const appealAnalysis = {
+                element: appealEl,
+                text: text.substring(0, 150),
+                timeScore: timeInfo.score,
+                domScore: domFreshness.score,
+                combinedScore: combinedScore,
+                timeText: timeInfo.timeText,
+                timeCategory: timeInfo.timeCategory,
+                isRecent: timeInfo.isRecent,
+                domIndicators: domFreshness.indicators,
+                classes: classes.substring(0, 100)
+            };
+
+            appealsWithTime.push(appealAnalysis);
+
+            console.log(`📋 [findMostRecentAppeals] Appeal ${i + 1} analysis:`, {
+                timeText: timeInfo.timeText,
+                timeScore: timeInfo.score,
+                domScore: domFreshness.score,
+                combinedScore: combinedScore,
+                category: timeInfo.timeCategory,
+                indicators: domFreshness.indicators
+            });
+        }
+
+        // Sort by combined score (higher = more recent/fresh)
+        appealsWithTime.sort((a, b) => b.combinedScore - a.combinedScore);
+
+        console.log(`📊 [findMostRecentAppeals] Analysis complete! Top 5 appeals by freshness:`);
+        appealsWithTime.slice(0, 5).forEach((appeal, i) => {
+            console.log(`  ${i + 1}. Score: ${appeal.combinedScore} | ${appeal.timeText} | ${appeal.timeCategory} | DOM: ${appeal.domIndicators.join(', ')}`);
+        });
+
+        return appealsWithTime.slice(0, 8); // Return top 8 most recent
+    }
+
+    // New method to analyze DOM-based freshness indicators
+    analyzeDOMFreshness(element) {
+        let score = 0;
+        const indicators = [];
+
+        try {
+            const classes = element.className || '';
+            const style = element.getAttribute('style') || '';
+
+            // Check for visual highlighting (usually indicates new/important items)
+            if (classes.includes('highlight') || classes.includes('active') || classes.includes('selected')) {
+                score += 200;
+                indicators.push('highlighted');
+            }
+
+            // Check for background colors that might indicate newness
+            if (style.includes('background') && (style.includes('rgb') || style.includes('#'))) {
+                score += 150;
+                indicators.push('colored_background');
+            }
+
+            // Check for animation classes (often used for new items)
+            if (classes.includes('animate') || classes.includes('pulse') || classes.includes('blink')) {
+                score += 300;
+                indicators.push('animated');
+            }
+
+            // Check for "new" related classes
+            const newPatterns = ['new', 'recent', 'fresh', 'latest', 'unread'];
+            for (const pattern of newPatterns) {
+                if (classes.toLowerCase().includes(pattern)) {
+                    score += 250;
+                    indicators.push(`class_${pattern}`);
+                }
+            }
+
+            // Check DOM position (first elements are often newer)
+            const parent = element.parentElement;
+            if (parent) {
+                const siblings = Array.from(parent.children);
+                const position = siblings.indexOf(element);
+                if (position <= 2) { // Top 3 positions
+                    score += 100 - (position * 20);
+                    indicators.push(`top_position_${position + 1}`);
+                }
+            }
+
+            // Check for data attributes that might indicate freshness
+            const dataAttributes = Array.from(element.attributes)
+                .filter(attr => attr.name.startsWith('data-'))
+                .map(attr => attr.name.toLowerCase());
+
+            if (dataAttributes.some(attr => attr.includes('new') || attr.includes('recent') || attr.includes('fresh'))) {
+                score += 180;
+                indicators.push('fresh_data_attr');
+            }
+
+            // Check for specific OmniChat patterns from logs
+            if (classes.includes('eCsute') || classes.includes('cAMVyq')) {
+                score += 50;
+                indicators.push('omnichat_fresh_class');
+            }
+
+            // Check for size patterns (newer items might be larger/more prominent)
+            const rect = element.getBoundingClientRect();
+            if (rect.height > 100) { // Larger elements might be more prominent
+                score += 30;
+                indicators.push('large_element');
+            }
+
+            // Check for nested elements that might indicate activity
+            const childCount = element.querySelectorAll('*').length;
+            if (childCount > 10) { // Rich content might indicate active/new appeals
+                score += 40;
+                indicators.push('rich_content');
+            }
+
+        } catch (error) {
+            console.warn('⚠️ [analyzeDOMFreshness] Error analyzing DOM freshness:', error.message);
+        }
+
+        if (indicators.length === 0) {
+            indicators.push('no_special_indicators');
+        }
+
+        return { score, indicators };
+    }
+
+    // Enhanced method to find appeals with time-based patterns in text
+    findTimePatterns(text) {
+        const patterns = [];
+
+        // Timer patterns (like "58 seconds", "45 seconds" from logs)
+        const timerMatch = text.match(/(\d+)\s*seconds?/gi);
+        if (timerMatch) {
+            timerMatch.forEach(match => {
+                patterns.push({ type: 'timer', value: match, priority: 'highest' });
+            });
+        }
+
+        // Russian time patterns
+        const russianTimePatterns = [
+            { regex: /(\d+)\s*секунд/gi, type: 'seconds', priority: 'highest' },
+            { regex: /(\d+)\s*мин/gi, type: 'minutes', priority: 'high' },
+            { regex: /(\d+)\s*час/gi, type: 'hours', priority: 'medium' },
+            { regex: /только что|сейчас|прямо сейчас/gi, type: 'immediate', priority: 'highest' },
+            { regex: /недавно/gi, type: 'recent', priority: 'high' }
+        ];
+
+        russianTimePatterns.forEach(pattern => {
+            const matches = text.match(pattern.regex);
+            if (matches) {
+                matches.forEach(match => {
+                    patterns.push({ type: pattern.type, value: match, priority: pattern.priority });
+                });
+            }
+        });
+
+        // Specific time patterns (HH:MM)
+        const timeMatch = text.match(/\d{1,2}:\d{2}/g);
+        if (timeMatch) {
+            timeMatch.forEach(time => {
+                patterns.push({ type: 'specific_time', value: time, priority: 'medium' });
+            });
+        }
+
+        return patterns;
+    }
+
+    // Enhanced method to extract and score time information from appeal text
+    extractTimeFromAppeal(text) {
+        const now = new Date();
+        let score = 0;
+        let timeText = '';
+        let isRecent = false;
+        let timeCategory = 'unknown';
+
+        console.log(`⏰ [extractTimeFromAppeal] Analyzing time in: "${text.substring(0, 100)}..."`);
+
+        // Priority 1: Timer patterns (from OmniChat system) - HIGHEST PRIORITY
+        const timerMatch = text.match(/(\d+)\s*seconds?/i) || text.match(/(\d+)\s*сек/);
+        if (timerMatch) {
+            const seconds = parseInt(timerMatch[1]);
+            score = 1500 - seconds; // Very high priority, decreases with time
+            timeText = `${seconds} секунд`;
+            isRecent = true;
+            timeCategory = 'timer';
+            console.log(`🔥 [extractTimeFromAppeal] Found timer: ${seconds} seconds (score: ${score})`);
+        }
+        // Priority 2: Immediate time patterns
+        else if (text.includes('только что') || text.includes('сейчас') || text.includes('прямо сейчас')) {
+            score = 1000;
+            timeText = 'только что';
+            isRecent = true;
+            timeCategory = 'immediate';
+            console.log(`⚡ [extractTimeFromAppeal] Found immediate pattern (score: ${score})`);
+        }
+        // Priority 3: Seconds ago patterns
+        else if (text.includes('секунд') || text.match(/\d+\s*сек/)) {
+            const secondsMatch = text.match(/(\d+)\s*секунд/) || text.match(/(\d+)\s*сек/);
+            if (secondsMatch) {
+                const seconds = parseInt(secondsMatch[1]);
+                score = 1200 - seconds; // High priority for seconds
+                timeText = `${seconds} секунд назад`;
+                isRecent = seconds <= 60;
+                timeCategory = 'seconds';
+                console.log(`⚡ [extractTimeFromAppeal] Found seconds pattern: ${seconds}s (score: ${score})`);
+            } else {
+                score = 950;
+                timeText = 'несколько секунд назад';
+                isRecent = true;
+                timeCategory = 'seconds';
+            }
+        }
+        // Priority 4: Minutes patterns (enhanced)
+        else if (text.includes('минут') || text.includes('мин') || text.match(/\d+\s*м\b/)) {
+            const minutesMatch = text.match(/(\d+)\s*(минут|мин|м\b)/) ||
+                               text.match(/(\d+)\s*minutes?/i);
+            if (minutesMatch) {
+                const minutes = parseInt(minutesMatch[1]);
+                score = 950 - (minutes * 2); // Decrease more rapidly for minutes
+                timeText = `${minutes} мин назад`;
+                isRecent = minutes <= 15; // Increased threshold for recent
+                timeCategory = 'minutes';
+                console.log(`⏱️ [extractTimeFromAppeal] Found minutes pattern: ${minutes}m (score: ${score})`);
+            } else {
+                score = 850;
+                timeText = 'несколько минут назад';
+                isRecent = true;
+                timeCategory = 'minutes';
+            }
+        }
+        // Priority 5: Hour patterns (enhanced)
+        else if (text.includes('час') || text.includes('hours') || text.match(/\d+\s*ч\b/)) {
+            const hoursMatch = text.match(/(\d+)\s*(час|ч\b|hours?)/i);
+            if (hoursMatch) {
+                const hours = parseInt(hoursMatch[1]);
+                score = 700 - (hours * 50);
+                timeText = `${hours} час${hours > 1 ? 'ов' : ''} назад`;
+                isRecent = hours <= 1;
+                timeCategory = 'hours';
+                console.log(`🕐 [extractTimeFromAppeal] Found hours pattern: ${hours}h (score: ${score})`);
+            } else {
+                score = 650;
+                timeText = 'час назад';
+                isRecent = false;
+                timeCategory = 'hours';
+            }
+        }
+        // Priority 6: Specific time today (enhanced with better time calculation)
+        else {
+            const timeMatch = text.match(/(\d{1,2}):(\d{2})/);
+            if (timeMatch) {
+                const [, hours, minutes] = timeMatch;
+                const appealTime = new Date();
+                appealTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+
+                // Handle day boundary crossings more intelligently
+                const diffMinutes = (now - appealTime) / (1000 * 60);
+
+                // If time appears to be in the future, it's probably from yesterday
+                if (diffMinutes < -120) { // More than 2 hours in future = yesterday
+                    const yesterdayTime = new Date(appealTime);
+                    yesterdayTime.setDate(yesterdayTime.getDate() - 1);
+                    const realDiffMinutes = (now - yesterdayTime) / (1000 * 60);
+
+                    score = Math.max(200 - (realDiffMinutes / 60), 50); // Lower score for yesterday
+                    timeText = `вчера ${hours}:${minutes}`;
+                    isRecent = false;
+                    timeCategory = 'yesterday';
+                    console.log(`📅 [extractTimeFromAppeal] Yesterday time: ${timeText} (score: ${score.toFixed(0)})`);
+                } else if (diffMinutes < 0) {
+                    // Small future difference, probably today but later
+                    score = 600;
+                    timeText = `${hours}:${minutes} (сегодня)`;
+                    isRecent = false;
+                    timeCategory = 'today_future';
+                    console.log(`🔮 [extractTimeFromAppeal] Future today: ${timeText} (score: ${score})`);
+                } else if (diffMinutes < 30) {
+                    // Very recent
+                    score = 900 - diffMinutes;
+                    timeText = `${hours}:${minutes} (${Math.round(diffMinutes)} мин назад)`;
+                    isRecent = true;
+                    timeCategory = 'today_recent';
+                    console.log(`🔥 [extractTimeFromAppeal] Recent today: ${timeText} (score: ${score.toFixed(0)})`);
+                } else if (diffMinutes < 360) { // Less than 6 hours
+                    score = 750 - (diffMinutes / 10);
+                    timeText = `${hours}:${minutes} (${Math.round(diffMinutes / 60)} ч назад)`;
+                    isRecent = diffMinutes <= 120; // Recent if less than 2 hours
+                    timeCategory = 'today_hours';
+                    console.log(`🕐 [extractTimeFromAppeal] Today hours ago: ${timeText} (score: ${score.toFixed(0)})`);
+                } else {
+                    // Older today
+                    score = 400 - (diffMinutes / 60);
+                    timeText = `${hours}:${minutes} (сегодня утром)`;
+                    isRecent = false;
+                    timeCategory = 'today_old';
+                    console.log(`🌅 [extractTimeFromAppeal] Earlier today: ${timeText} (score: ${score.toFixed(0)})`);
+                }
+            } else {
+                // No time found, check for other temporal indicators
+                if (text.includes('новое') || text.includes('новый') || text.includes('new')) {
+                    score = 800;
+                    timeText = 'помечено как новое';
+                    isRecent = true;
+                    timeCategory = 'marked_new';
+                } else if (text.includes('недавно')) {
+                    score = 750;
+                    timeText = 'недавно';
+                    isRecent = true;
+                    timeCategory = 'recent_generic';
+                } else {
+                    score = 300; // Default low score
+                    timeText = 'время не определено';
+                    isRecent = false;
+                    timeCategory = 'unknown';
+                }
+            }
+        }
+
+        const result = {
+            score: Math.round(score),
+            timeText,
+            isRecent,
+            timeCategory,
+            raw: text.substring(0, 100)
+        };
+
+        console.log(`📊 [extractTimeFromAppeal] Result:`, result);
+        return result;
+    }
+
+    // Helper method to find appeals without responses (unprocessed)
+    async findUnprocessedAppeals() {
+        console.log('💬 [findUnprocessedAppeals] Looking for appeals without responses...');
+
+        const allAppeals = Array.from(document.querySelectorAll('div[data-testid="appeal-preview"]'));
+        const unprocessedAppeals = [];
+
+        for (const appealEl of allAppeals) {
+            if (appealEl.offsetParent === null) continue;
+
+            const text = appealEl.textContent || '';
+
+            // Check if appeal seems to be unprocessed
+            const isUnprocessed = this.checkIfAppealUnprocessed(text);
+
+            if (isUnprocessed) {
+                unprocessedAppeals.push({
+                    element: appealEl,
+                    text: text,
+                    reason: isUnprocessed.reason
+                });
+            }
+        }
+
+        console.log(`💬 [findUnprocessedAppeals] Found ${unprocessedAppeals.length} potentially unprocessed appeals`);
+
+        return unprocessedAppeals.slice(0, 3); // Return first 3
+    }
+
+    // Helper method to check if appeal appears to be unprocessed
+    checkIfAppealUnprocessed(text) {
+        // Indicators that appeal might be unprocessed
+        const unprocessedIndicators = [
+            // No response indicators
+            { pattern: /^(?!.*отвечено|.*ответ|.*решено|.*закрыто).*$/i, reason: 'no response indicators' },
+
+            // Initial greeting/question patterns
+            { pattern: /добрый день|здравствуйте|помогите|проблема|не работает/i, reason: 'initial greeting/problem' },
+
+            // Technical support requests
+            { pattern: /тех\.?поддержка|техподдержка|технической поддержки/i, reason: 'tech support request' },
+
+            // Question words at start
+            { pattern: /^(как|что|где|когда|почему|можно ли)/i, reason: 'question format' }
+        ];
+
+        for (const indicator of unprocessedIndicators) {
+            if (indicator.pattern.test(text)) {
+                return { isUnprocessed: true, reason: indicator.reason };
+            }
+        }
+
+        return false;
     }
 
     // Appeal selection logic with enhanced error handling and retry logic
@@ -371,564 +1047,343 @@ class TemplateProcessor {
         return true; // Continue processing even if selection fails
     }
 
-    // Template selector opening with enhanced button search
+    // ===== TEMPLATE OPERATIONS =====
     async openTemplateSelector() {
-        console.log('📋 [openTemplateSelector] Starting adaptive template selector opening...');
+        this._logProcess('Template', 'Opening template selector');
 
-        // Use the new adaptive search method
-        const templateButton = await this.findElementAdaptive({
-            description: 'template button',
-            primarySelectors: [
-                // Data-testid selectors
-                'button[data-testid="choose-templates"]',
-                'button[data-testid*="template"]',
-                '[data-testid="template-button"]',
-                '[data-testid*="reply-template"]',
-
-                // Title and aria attributes
-                'button[title*="Шаблон"]',
-                'button[title*="шаблон"]',
-                'button[title*="Template"]',
-                'button[aria-label*="шаблон"]',
-                'button[aria-label*="Template"]',
-
-                // Class-based selectors
-                'button[class*="template"]',
-                '.template-button',
-                '.btn-template',
-
-                // Generic button patterns
-                'button[type="button"]:not([disabled])'
-            ],
-            contextSelectors: [
-                'textarea',
-                '[contenteditable="true"]',
-                '[data-testid="message-input"]',
-                'div[role="textbox"]'
-            ],
-            svgPatterns: [
-                'template', 'clipboard', 'list', 'document', 'file', 'copy', 'duplicate', 'snippet', 'preset'
-            ],
-            textPatterns: [
-                'Шаблон', 'шаблон', 'Template', 'template', 'Шаблоны', 'шаблоны', 'Templates',
-                'Заготовка', 'заготовка', 'Preset', 'preset', 'Быстрый ответ', 'быстрый ответ',
-                '📋', '📄', '📝', '🗂️', '📑'
-            ]
-        });
-
+        // Primary approach: find template button
+        const templateButton = await this._findTemplateButton();
         if (templateButton) {
-            console.log('✅ [openTemplateSelector] Template button found, attempting advanced click...');
+            const success = await this._clickTemplateButton(templateButton);
+            if (success) return true;
+        }
 
-            // Use advanced click method
-            const clicked = await this.performAdvancedClick(templateButton, 'template button');
-            if (clicked) {
-                // Wait for templates to load with adaptive waiting
-                console.log('⏳ [openTemplateSelector] Waiting for templates to load...');
-                const templatesLoaded = await this.waitForTemplatesLoad();
-                if (templatesLoaded) {
-                    console.log('✅ [openTemplateSelector] Template selector opened successfully');
+        // Fallback approach
+        return await this._fallbackTemplateButtonSearch();
+    }
+
+    async _findTemplateButton() {
+        for (const selector of this.selectors.templates.button) {
+            const button = document.querySelector(selector);
+            if (button && !button.disabled && button.offsetParent !== null) {
+                this._logDebug(`Found template button: ${selector}`);
+                return button;
+            }
+        }
+        return null;
+    }
+
+    async _clickTemplateButton(button) {
+        const clicked = await this.performAdvancedClick(button, 'template button');
+        if (clicked) {
+            this._logDebug('Waiting for templates to load');
+            const loaded = await this.waitForTemplatesLoad();
+            if (loaded) {
+                this._logSuccess('Template selector opened');
+                return true;
+            }
+        }
+        return false;
+    }
+
+    async _fallbackTemplateButtonSearch() {
+        this._logProcess('Template', 'Trying fallback template search');
+
+        const messageInput = this.findMessageInput();
+        if (!messageInput) return false;
+
+        const container = messageInput.closest('form') ||
+                         messageInput.closest('[class*="container"]') ||
+                         messageInput.parentElement;
+
+        if (!container) return false;
+
+        const buttons = Array.from(container.querySelectorAll('button:not([disabled])'));
+        this._logDebug(`Found ${buttons.length} buttons near message input`);
+
+        for (const button of buttons) {
+            if (this._isLikelyTemplateButton(button)) {
+                this._logDebug(`Trying potential template button`);
+                await this.performAdvancedClick(button, 'fallback template');
+                await this.wait(500);
+
+                if (await this.waitForTemplatesLoad()) {
+                    this._logSuccess('Template selector opened via fallback');
                     return true;
                 }
             }
         }
 
-        // Enhanced fallback: try all buttons near message input with smart filtering
-        console.log('🔄 [openTemplateSelector] Template button not found, trying smart fallback...');
-        const messageInput = this.findMessageInput();
-        if (messageInput) {
-            const container = messageInput.closest('form') ||
-                            messageInput.closest('[class*="container"]') ||
-                            messageInput.closest('[class*="wrapper"]') ||
-                            messageInput.parentElement;
-
-            if (container) {
-                const nearbyButtons = Array.from(container.querySelectorAll('button:not([disabled])'));
-                console.log(`🔍 [openTemplateSelector] Found ${nearbyButtons.length} buttons near message input`);
-
-                // Filter and try buttons that might be templates
-                for (const button of nearbyButtons) {
-                    if (button.offsetParent === null) continue;
-
-                    const hasSvg = button.querySelector('svg');
-                    const buttonText = button.textContent.toLowerCase();
-                    const buttonClass = button.getAttribute('class') || '';
-
-                    // Skip obvious non-template buttons
-                    const skipPatterns = ['отправить', 'send', 'submit', 'close', 'cancel', 'отмена'];
-                    if (skipPatterns.some(pattern => buttonText.includes(pattern))) {
-                        continue;
-                    }
-
-                    // Prioritize buttons with SVG or template-related classes/text
-                    const isLikelyTemplate = hasSvg ||
-                                           buttonClass.includes('template') ||
-                                           buttonText.includes('шаблон') ||
-                                           button.getAttribute('data-testid')?.includes('template');
-
-                    if (isLikelyTemplate) {
-                        console.log(`🔄 [openTemplateSelector] Trying potential template button: "${buttonText.substring(0, 30)}"`);
-
-                        await this.performAdvancedClick(button, 'fallback template button');
-                        await this.wait(500);
-
-                        if (await this.waitForTemplatesLoad()) {
-                            console.log('✅ [openTemplateSelector] Template selector opened via smart fallback');
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-
-        console.error('❌ [openTemplateSelector] Failed to open template selector with all strategies');
-        this.debugUIState(); // Provide debugging info
+        this._logError('Failed to open template selector');
         return false;
     }
 
-    // Enhanced message sending with adaptive search strategies
-    async sendTemplateMessage() {
-        console.log('📤 [sendTemplateMessage] Starting adaptive message sending...');
+    _isLikelyTemplateButton(button) {
+        if (button.offsetParent === null) return false;
 
-        await this.wait(500);
+        const text = button.textContent.toLowerCase();
+        const className = button.getAttribute('class') || '';
+        const skipPatterns = ['отправить', 'send', 'submit', 'close', 'cancel'];
 
-        // Use adaptive search to find send button
-        const sendButton = await this.findElementAdaptive({
-            description: 'send button',
-            primarySelectors: [
-                'button[title="Отправить"]',
-                'button[title="Отправить сообщение"]',
-                'button[aria-label*="Send"]',
-                'button[aria-label*="Отправить"]',
-                'button[type="submit"]:not([disabled])',
-                '[data-testid="send-button"]',
-                '[data-testid*="send"]'
-            ],
-            contextSelectors: [
-                'textarea',
-                '[contenteditable="true"]',
-                '[data-testid="message-input"]',
-                'div[role="textbox"]'
-            ],
-            svgPatterns: [
-                'send', 'arrow', 'paper-plane', 'submit', 'forward'
-            ],
-            textPatterns: [
-                'Отправить', 'отправить', 'Send', 'send', 'Отпр', '→', '▶', '↗'
-            ]
-        });
+        if (skipPatterns.some(pattern => text.includes(pattern))) return false;
 
-        if (sendButton) {
-            console.log('✅ [sendTemplateMessage] Send button found, attempting advanced click...');
-
-            // Use advanced click method
-            const clicked = await this.performAdvancedClick(sendButton, 'send button');
-            if (clicked) {
-                await this.wait(300);
-
-                // Check if message was sent (verify textarea is empty)
-                const msgInput = this.findMessageInput();
-                if (msgInput && (msgInput.value === '' || msgInput.textContent === '' || msgInput.innerText === '')) {
-                    console.log('✅ [sendTemplateMessage] Message sent successfully');
-                    return true;
-                }
-            }
-        }
-
-        // Fallback 1: Try last button in message container
-        console.log('🔄 [sendTemplateMessage] Send button not found, trying fallback strategies...');
-        const messageInput = this.findMessageInput();
-        if (messageInput) {
-            const container = messageInput.closest('form') ||
-                            messageInput.closest('[class*="container"]') ||
-                            messageInput.closest('[class*="wrapper"]') ||
-                            messageInput.parentElement;
-
-            if (container) {
-                const buttons = Array.from(container.querySelectorAll('button:not([disabled])'));
-                console.log(`🔍 [sendTemplateMessage] Found ${buttons.length} buttons in message container`);
-
-                // Try the last button (often the send button)
-                if (buttons.length > 0) {
-                    const lastButton = buttons[buttons.length - 1];
-                    const buttonText = lastButton.textContent.toLowerCase();
-
-                    // Skip if it's obviously not a send button
-                    if (!buttonText.includes('отмена') && !buttonText.includes('cancel') && !buttonText.includes('шаблон')) {
-                        console.log(`🔄 [sendTemplateMessage] Trying last button: "${buttonText}"`);
-
-                        await this.performAdvancedClick(lastButton, 'last button in container');
-                        await this.wait(300);
-
-                        if (messageInput && (messageInput.value === '' || messageInput.textContent === '')) {
-                            console.log('✅ [sendTemplateMessage] Message sent via last button');
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Fallback 2: Enter key on textarea
-        console.log('⌨️ [sendTemplateMessage] Trying Enter key fallback...');
-        if (messageInput) {
-            console.log('📍 [sendTemplateMessage] Found message input, focusing and sending Enter key...');
-            messageInput.focus();
-            await this.wait(100);
-
-            // Try multiple Enter key events
-            const enterMethods = [
-                // Method 1: keydown
-                () => {
-                    const keydownEvent = new KeyboardEvent('keydown', {
-                        key: 'Enter',
-                        code: 'Enter',
-                        keyCode: 13,
-                        bubbles: true,
-                        cancelable: true
-                    });
-                    messageInput.dispatchEvent(keydownEvent);
-                },
-                // Method 2: keypress
-                () => {
-                    const keypressEvent = new KeyboardEvent('keypress', {
-                        key: 'Enter',
-                        keyCode: 13,
-                        bubbles: true,
-                        cancelable: true
-                    });
-                    messageInput.dispatchEvent(keypressEvent);
-                },
-                // Method 3: submit event on form
-                () => {
-                    const form = messageInput.closest('form');
-                    if (form) {
-                        const submitEvent = new Event('submit', {
-                            bubbles: true,
-                            cancelable: true
-                        });
-                        form.dispatchEvent(submitEvent);
-                    }
-                }
-            ];
-
-            for (let i = 0; i < enterMethods.length; i++) {
-                try {
-                    console.log(`⌨️ [sendTemplateMessage] Trying Enter method ${i + 1}`);
-                    enterMethods[i]();
-                    await this.wait(200);
-
-                    if (messageInput.value === '' || messageInput.textContent === '') {
-                        console.log(`✅ [sendTemplateMessage] Message sent via Enter method ${i + 1}`);
-                        return true;
-                    }
-                } catch (error) {
-                    console.warn(`⚠️ [sendTemplateMessage] Enter method ${i + 1} failed:`, error.message);
-                }
-            }
-        }
-
-        console.error('❌ [sendTemplateMessage] All sending methods failed');
-        this.debugUIState(); // Provide debugging info
-        return false;
+        return button.querySelector('svg') ||
+               className.includes('template') ||
+               text.includes('шаблон') ||
+               button.getAttribute('data-testid')?.includes('template');
     }
 
-    // Helper method to check if button is clickable
-    isButtonClickable(button) {
-        if (!button) {
-            console.log('🔧 [isButtonClickable] Button is null');
-            return false;
-        }
 
-        // Check if button is visible (offsetParent is not null)
-        if (button.offsetParent === null) {
-            console.log('🔧 [isButtonClickable] Button not visible (offsetParent is null)');
-            return false;
-        }
+    _isElementClickable(element) {
+        if (!element) return false;
+        if (element.offsetParent === null) return false;
+        if (element.disabled) return false;
 
-        // Check if button is enabled
-        if (button.disabled) {
-            console.log('🔧 [isButtonClickable] Button is disabled');
-            return false;
-        }
-
-        // Additional visibility checks
-        const computedStyle = window.getComputedStyle(button);
-        if (computedStyle.display === 'none' || computedStyle.visibility === 'hidden') {
-            console.log('🔧 [isButtonClickable] Button hidden via CSS');
-            return false;
-        }
-
-        console.log('✅ [isButtonClickable] Button is clickable');
-        return true;
+        const style = window.getComputedStyle(element);
+        return style.display !== 'none' && style.visibility !== 'hidden';
     }
 
-    // Helper method to wait for templates to load
     async waitForTemplatesLoad() {
-        console.log('⏳ [waitForTemplatesLoad] Waiting for templates to load...');
+        this._logDebug('Waiting for templates to load');
 
+        const maxAttempts = this.config.waitForTemplatesTimeout / 300;
         let attempts = 0;
-        while (attempts < 10) {
-            const templates = document.querySelectorAll('div[data-testid="reply-template"]');
+
+        while (attempts < maxAttempts) {
+            const templates = document.querySelectorAll(this.selectors.templates.list);
             if (templates.length > 0) {
-                console.log(`✅ [waitForTemplatesLoad] Found ${templates.length} templates after ${attempts + 1} attempts`);
+                this._logSuccess(`Found ${templates.length} templates after ${attempts + 1} attempts`);
                 return true;
             }
 
-            console.log(`⏳ [waitForTemplatesLoad] Attempt ${attempts + 1}/10: No templates found, waiting...`);
             await this.wait(300);
             attempts++;
         }
 
-        console.warn('⚠️ [waitForTemplatesLoad] Templates did not load after 10 attempts (3 seconds)');
+        this._logWarning(`Templates did not load after ${this.config.waitForTemplatesTimeout}ms`);
         return false;
     }
 
-    // Template selection
     async selectTemplate() {
-        console.log('✅ Selecting template:', this.templateConfig.templateText);
+        this._logProcess('Template', 'Selecting greeting template');
 
-        const templates = document.querySelectorAll('div[data-testid="reply-template"]');
+        const templates = document.querySelectorAll(this.selectors.templates.list);
         if (templates.length === 0) {
-            console.log('❌ No templates found');
+            this._logError('No templates found');
             return false;
         }
 
         // Find greeting template
         for (const template of templates) {
-            const templateText = template.textContent || '';
-
-            if (templateText.includes(this.templateConfig.templateTitle) ||
-                templateText.includes('Приветствие') ||
-                templateText.includes('Добрый день')) {
-
-                console.log('🎯 Found greeting template, clicking...');
+            if (this._isGreetingTemplate(template)) {
+                this._logDebug('Found greeting template, clicking');
                 template.click();
                 await this.wait(500);
 
-                // Verify template was inserted
-                const msgInput = document.querySelector('textarea') ||
-                                   document.querySelector('[contenteditable="true"]') ||
-                                   document.querySelector('div[role="textbox"]');
-
-                if (msgInput) {
-                    const currentText = msgInput.value || msgInput.textContent || msgInput.innerText;
-                    if (currentText.includes('Запрос принят в работу') || currentText.includes('Добрый день')) {
-                        console.log('✅ Template text inserted successfully');
-                        return true;
-                    }
+                if (await this._verifyTemplateInserted()) {
+                    this._logSuccess('Template selected and inserted');
+                    return true;
                 }
             }
         }
 
-        console.log('❌ Failed to select template');
+        this._logError('Failed to select greeting template');
         return false;
     }
 
-    // Message sending with enhanced button detection and fallback strategies
-    async sendTemplateMessage() {
-        console.log('📤 [sendTemplateMessage] Starting message sending...');
+    _isGreetingTemplate(template) {
+        const text = template.textContent || '';
+        return this.selectors.templates.greeting.some(pattern => text.includes(pattern));
+    }
 
+    async _verifyTemplateInserted() {
+        const msgInput = this.findMessageInput();
+        if (!msgInput) return false;
+
+        const currentText = msgInput.value || msgInput.textContent || msgInput.innerText || '';
+        return currentText.includes('Запрос принят в работу') || currentText.includes('Добрый день');
+    }
+
+    // ===== MESSAGE SENDING SYSTEM =====
+    async sendTemplateMessage() {
+        this._logProcess('Send', 'Starting message sending');
         await this.wait(500);
 
-        // Step 1: Try specific send button selectors in order
-        const sendButtonSelectors = [
-            'button[title="Отправить"]',
-            'button[title="Отправить сообщение"]',
-            'button[aria-label*="Send"]',
-            'button[type="submit"]:not([disabled])'
-        ];
+        // Primary approach: find send button
+        const success = await this._trySendButton() ||
+                       await this._tryContainerButton() ||
+                       await this._tryEnterKey();
 
-        console.log('🔍 [sendTemplateMessage] Trying primary send button selectors...');
-
-        for (let i = 0; i < sendButtonSelectors.length; i++) {
-            const selector = sendButtonSelectors[i];
-            console.log(`🎯 [sendTemplateMessage] Attempt ${i + 1}: Trying selector: ${selector}`);
-
-            const sendButton = document.querySelector(selector);
-            if (sendButton && !sendButton.disabled) {
-                console.log(`📍 [sendTemplateMessage] Found button with selector: ${selector}`);
-
-                // Try regular click first
-                console.log(`📱 [sendTemplateMessage] Attempting regular click...`);
-                sendButton.click();
-                await this.wait(300);
-
-                // Check if message was sent (could verify by checking if textarea is empty)
-                const messageInput = this.findMessageInput();
-                if (messageInput && (messageInput.value === '' || messageInput.textContent === '')) {
-                    console.log(`✅ [sendTemplateMessage] Message sent successfully via regular click (selector: ${selector})`);
-                    return true;
-                }
-
-                console.warn(`⚠️ [sendTemplateMessage] Regular click may have failed, trying fallback methods...`);
-
-                // Fallback 1: dispatchEvent with MouseEvent
-                console.log(`📱 [sendTemplateMessage] Trying MouseEvent dispatchEvent...`);
-                sendButton.dispatchEvent(new MouseEvent('click', {
-                    bubbles: true,
-                    cancelable: true,
-                    view: window
-                }));
-                await this.wait(300);
-
-                if (messageInput && (messageInput.value === '' || messageInput.textContent === '')) {
-                    console.log(`✅ [sendTemplateMessage] Message sent successfully via MouseEvent (selector: ${selector})`);
-                    return true;
-                }
-
-                // Fallback 2: dispatchEvent with submit Event
-                console.log(`📱 [sendTemplateMessage] Trying submit Event...`);
-                sendButton.dispatchEvent(new Event('submit', {
-                    bubbles: true,
-                    cancelable: true
-                }));
-                await this.wait(300);
-
-                if (messageInput && (messageInput.value === '' || messageInput.textContent === '')) {
-                    console.log(`✅ [sendTemplateMessage] Message sent successfully via submit Event (selector: ${selector})`);
-                    return true;
-                }
-
-                console.warn(`⚠️ [sendTemplateMessage] All click methods failed for selector: ${selector}`);
-            } else if (sendButton && sendButton.disabled) {
-                console.warn(`⚠️ [sendTemplateMessage] Button found but disabled for selector: ${selector}`);
-            } else {
-                console.log(`❌ [sendTemplateMessage] No button found for selector: ${selector}`);
-            }
-        }
-
-        // Step 2: Try last button in .message-input-container
-        console.log('🔍 [sendTemplateMessage] Trying last button in .message-input-container...');
-        const messageInputContainer = document.querySelector('.message-input-container');
-        if (messageInputContainer) {
-            const buttonsInContainer = messageInputContainer.querySelectorAll('button:not([disabled])');
-            if (buttonsInContainer.length > 0) {
-                const lastButton = buttonsInContainer[buttonsInContainer.length - 1];
-                console.log(`📍 [sendTemplateMessage] Found last button in container (${buttonsInContainer.length} total buttons)`);
-
-                lastButton.click();
-                await this.wait(300);
-
-                const messageInput = this.findMessageInput();
-                if (messageInput && (messageInput.value === '' || messageInput.textContent === '')) {
-                    console.log(`✅ [sendTemplateMessage] Message sent successfully via last button in container`);
-                    return true;
-                }
-
-                console.warn(`⚠️ [sendTemplateMessage] Last button click failed`);
-            } else {
-                console.log(`❌ [sendTemplateMessage] No enabled buttons found in .message-input-container`);
-            }
+        if (success) {
+            this._logSuccess('Message sent successfully');
         } else {
-            console.log(`❌ [sendTemplateMessage] .message-input-container not found`);
+            this._logError('All sending methods failed');
         }
 
-        // Step 3: Fallback to Enter key on textarea
-        console.log('⌨️ [sendTemplateMessage] Trying Enter key fallback...');
-        const messageInput = this.findMessageInput();
+        return success;
+    }
 
-        if (messageInput) {
-            console.log(`📍 [sendTemplateMessage] Found message input, focusing and sending Enter key...`);
-            messageInput.focus();
-            await this.wait(100);
+    async _trySendButton() {
+        this._logDebug('Trying primary send button selectors');
 
-            // Try keypress event (some systems respond to this)
-            console.log(`⌨️ [sendTemplateMessage] Sending keypress event...`);
-            messageInput.dispatchEvent(new KeyboardEvent('keypress', {
-                key: 'Enter',
-                keyCode: 13,
-                bubbles: true,
-                cancelable: true
-            }));
-            await this.wait(200);
+        for (const selector of this.selectors.messaging.send) {
+            const button = document.querySelector(selector);
+            if (button && !button.disabled) {
+                this._logDebug(`Found send button: ${selector}`);
 
-            if (messageInput.value === '' || messageInput.textContent === '') {
-                console.log(`✅ [sendTemplateMessage] Message sent successfully via Enter keypress`);
-                return true;
+                if (await this._attemptSend(button)) {
+                    this._logSuccess(`Message sent via: ${selector}`);
+                    return true;
+                }
             }
-
-            // Also try keydown event as backup
-            console.log(`⌨️ [sendTemplateMessage] Sending keydown event...`);
-            messageInput.dispatchEvent(new KeyboardEvent('keydown', {
-                key: 'Enter',
-                code: 'Enter',
-                keyCode: 13,
-                bubbles: true,
-                cancelable: true
-            }));
-            await this.wait(200);
-
-            if (messageInput.value === '' || messageInput.textContent === '') {
-                console.log(`✅ [sendTemplateMessage] Message sent successfully via Enter keydown`);
-                return true;
-            }
-
-            console.warn(`⚠️ [sendTemplateMessage] Enter key events failed`);
-        } else {
-            console.error(`❌ [sendTemplateMessage] No message input found for Enter key fallback`);
         }
-
-        console.error('❌ [sendTemplateMessage] All sending methods failed');
         return false;
     }
 
-    // Helper method to find message input
-    findMessageInput() {
-        const selectors = [
-            'textarea',
-            '[contenteditable="true"]',
-            'div[role="textbox"]',
-            '[data-testid="message-input"]'
+    async _tryContainerButton() {
+        this._logDebug('Trying last button in message container');
+
+        const container = document.querySelector('.message-input-container');
+        if (!container) return false;
+
+        const buttons = container.querySelectorAll('button:not([disabled])');
+        if (buttons.length === 0) return false;
+
+        const lastButton = buttons[buttons.length - 1];
+        return await this._attemptSend(lastButton);
+    }
+
+    async _tryEnterKey() {
+        this._logDebug('Trying Enter key fallback');
+
+        const messageInput = this.findMessageInput();
+        if (!messageInput) return false;
+
+        messageInput.focus();
+        await this.wait(100);
+
+        // Try different Enter key events
+        const events = [
+            new KeyboardEvent('keypress', { key: 'Enter', keyCode: 13, bubbles: true }),
+            new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true })
         ];
 
-        for (const selector of selectors) {
-            const element = document.querySelector(selector);
-            if (element) {
-                return element;
+        for (const event of events) {
+            messageInput.dispatchEvent(event);
+            await this.wait(200);
+
+            if (await this._isMessageSent()) {
+                this._logSuccess('Message sent via Enter key');
+                return true;
             }
         }
 
+        return false;
+    }
+
+    async _attemptSend(button) {
+        // Try multiple click methods
+        const methods = [
+            () => button.click(),
+            () => button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })),
+            () => button.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+        ];
+
+        for (const method of methods) {
+            try {
+                method();
+                await this.wait(300);
+
+                if (await this._isMessageSent()) {
+                    return true;
+                }
+            } catch (error) {
+                this._logWarning('Send method failed', error.message);
+            }
+        }
+
+        return false;
+    }
+
+    async _isMessageSent() {
+        const messageInput = this.findMessageInput();
+        if (!messageInput) return false;
+
+        const text = messageInput.value || messageInput.textContent || messageInput.innerText || '';
+        return text.trim() === '';
+    }
+
+    // Use shared utility for message input finding
+    findMessageInput() {
+        return window.OmniChatUtils?.findMessageInput() || this._fallbackFindMessageInput();
+    }
+
+    _fallbackFindMessageInput() {
+        const selectors = ['textarea', '[contenteditable="true"]', 'div[role="textbox"]', '[data-testid="message-input"]'];
+        for (const selector of selectors) {
+            const element = document.querySelector(selector);
+            if (element) return element;
+        }
         return null;
     }
 
-    // Helper methods
+    // Use shared utilities for common operations
     isChatUIOpen() {
-        const chatElements = [
-            'textarea',
-            '[contenteditable="true"]',
-            'div[role="textbox"]',
-            '[data-testid="message-input"]'
-        ];
+        return window.OmniChatUtils?.isChatUIOpen() || this._fallbackIsChatUIOpen();
+    }
 
-        for (const selector of chatElements) {
+    _fallbackIsChatUIOpen() {
+        const selectors = ['textarea', '[contenteditable="true"]', 'div[role="textbox"]', '[data-testid="message-input"]'];
+        return selectors.some(selector => {
             const element = document.querySelector(selector);
-            if (element && element.offsetHeight > 0) {
-                return true;
-            }
-        }
-
-        return false;
+            return element && element.offsetHeight > 0;
+        });
     }
 
     wait(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
+        return window.OmniChatUtils?.wait(ms) || new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    // Universal method to wait for element appearance
-    async waitForElement(selector, timeout = 5000, checkInterval = 100) {
-        console.log(`⏳ [waitForElement] Waiting for element: ${selector}`);
+    // ===== CENTRALIZED LOGGING SYSTEM =====
+    _logInfo(message, data = null) {
+        console.log(`🔵 [TemplateProcessor] ${message}`, data || '');
+    }
 
+    _logSuccess(message, data = null) {
+        console.log(`✅ [TemplateProcessor] ${message}`, data || '');
+    }
+
+    _logWarning(message, data = null) {
+        console.warn(`⚠️ [TemplateProcessor] ${message}`, data || '');
+    }
+
+    _logError(message, error = null) {
+        console.error(`❌ [TemplateProcessor] ${message}`, error || '');
+    }
+
+    _logDebug(message, data = null) {
+        console.log(`🔧 [TemplateProcessor] ${message}`, data || '');
+    }
+
+    _logProcess(step, message, data = null) {
+        console.log(`🎯 [TemplateProcessor:${step}] ${message}`, data || '');
+    }
+
+    // ===== UTILITY METHODS =====
+    async waitForElement(selector, timeout = 5000, checkInterval = 100) {
+        this._logDebug(`Waiting for element: ${selector}`);
         const startTime = Date.now();
+
         while (Date.now() - startTime < timeout) {
             const element = document.querySelector(selector);
             if (element && element.offsetParent !== null) {
-                console.log(`✅ [waitForElement] Element found: ${selector}`);
+                this._logSuccess(`Element found: ${selector}`);
                 return element;
             }
             await this.wait(checkInterval);
         }
 
-        console.warn(`⚠️ [waitForElement] Element not found after ${timeout}ms: ${selector}`);
+        this._logWarning(`Element not found after ${timeout}ms: ${selector}`);
         return null;
     }
 
@@ -1322,24 +1777,71 @@ class TemplateProcessor {
             const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"], [role="textbox"]');
             console.log(`📝 Found ${inputs.length} input elements`);
 
-            // 4. Appeal-related elements (if we can detect them)
-            console.group('🎯 Appeal Elements Detection');
-            const possibleAppealElements = document.querySelectorAll('[data-testid*="appeal"], [class*="appeal"], [id*="appeal"]');
-            console.log(`Appeal elements by attributes: ${possibleAppealElements.length}`);
+            // 4. Appeal-related elements with smart new appeal analysis
+            console.group('🎯 Appeal Elements & New Appeal Detection');
 
-            // Look for elements containing numbers (potential appeal IDs)
-            const elementsWithNumbers = Array.from(document.querySelectorAll('*')).filter(el => {
-                const text = el.textContent || '';
-                return /\b\d{6,}\b/.test(text) && el.children.length === 0; // Has 6+ digit numbers and no children
-            }).slice(0, 5);
-            console.log(`Elements with potential IDs: ${elementsWithNumbers.length}`);
-            elementsWithNumbers.forEach((el, i) => {
-                console.log(`ID element ${i + 1}:`, {
-                    text: (el.textContent || '').substring(0, 100),
-                    tagName: el.tagName,
-                    className: el.className
+            const appealPreviews = document.querySelectorAll('div[data-testid="appeal-preview"]');
+            console.log(`📋 Total appeal previews found: ${appealPreviews.length}`);
+
+            // Enhanced appeals analysis with time intelligence
+            console.group('⏰ Enhanced Recent Appeals Analysis');
+            this.findMostRecentAppeals().then(recentAppeals => {
+                console.log(`🔥 Top 5 most recent appeals by combined score:`);
+                recentAppeals.slice(0, 5).forEach((appeal, i) => {
+                    console.log(`  ${i + 1}. [${appeal.combinedScore}] ${appeal.timeText} (${appeal.timeCategory})`, {
+                        timeScore: appeal.timeScore,
+                        domScore: appeal.domScore,
+                        indicators: appeal.domIndicators,
+                        text: appeal.text.substring(0, 80) + '...'
+                    });
                 });
+
+                // Group by time categories
+                const categories = {};
+                recentAppeals.forEach(appeal => {
+                    const cat = appeal.timeCategory;
+                    if (!categories[cat]) categories[cat] = 0;
+                    categories[cat]++;
+                });
+                console.log('📊 Appeals by time category:', categories);
+
+                // Show recent appeals only
+                const recentOnly = recentAppeals.filter(a => a.isRecent);
+                console.log(`🔥 ${recentOnly.length} appeals marked as recent (within threshold)`);
             });
+            console.groupEnd();
+
+            console.group('💬 Unprocessed Appeals Analysis');
+            this.findUnprocessedAppeals().then(unprocessedAppeals => {
+                console.log(`🔄 Unprocessed appeals found: ${unprocessedAppeals.length}`);
+                unprocessedAppeals.forEach((appeal, i) => {
+                    console.log(`Unprocessed ${i + 1}:`, {
+                        reason: appeal.reason,
+                        text: appeal.text.substring(0, 80) + '...'
+                    });
+                });
+
+                // Cross-reference with recent appeals
+                console.log('🎯 Checking which unprocessed appeals are also recent...');
+            });
+            console.groupEnd();
+
+            // Look for visual indicators of new appeals
+            const newIndicatorSelectors = [
+                '[class*="new"]',
+                '[class*="unread"]',
+                '[class*="highlight"]',
+                '[style*="background"]'
+            ];
+
+            console.log('🟢 Checking for new appeal indicators:');
+            newIndicatorSelectors.forEach(selector => {
+                const elements = document.querySelectorAll(selector);
+                if (elements.length > 0) {
+                    console.log(`  ${selector}: ${elements.length} elements`);
+                }
+            });
+
             console.groupEnd();
 
             // 5. Template-related elements
@@ -1368,23 +1870,36 @@ class TemplateProcessor {
         console.groupEnd();
     }
 
-    // Configuration
+    // ===== CONFIGURATION MANAGEMENT =====
     updateConfig(newConfig) {
-        this.templateConfig = { ...this.templateConfig, ...newConfig };
-        console.log('📝 Template configuration updated:', this.templateConfig);
+        this.config = { ...this.config, ...newConfig };
+        this._logInfo('Configuration updated', this.config);
     }
 
     getConfig() {
-        return { ...this.templateConfig };
+        return { ...this.config };
+    }
+
+    // ===== PUBLIC API METHODS (These methods are already implemented above) =====
+    // extractTimeFromAppeal(text) - Already implemented at line 478
+    // analyzeDOMFreshness(element) - Already implemented at line 349
+    // checkIfAppealUnprocessed(text) - Already implemented at line 670
+    // logElementState(element, context) - Already implemented at line 1600
+    // findElementAdaptive(config) - Already implemented at line 1457
+    // calculateElementScore(element, pattern) - Already implemented at line 1562
+    // findTimePatterns(text) - Already implemented at line 437
+
+    isButtonClickable(button) {
+        return this._isElementClickable(button);
     }
 }
 
-// Create global instance
+// ===== INITIALIZATION =====
 window.templateProcessor = new TemplateProcessor();
 
-console.log('✅ TemplateProcessor initialized with enhanced debugging');
-console.log('🔧 Available debug commands:');
-console.log('  templateProcessor.processAppeal({appealId: "TEST", element: null})');
-console.log('  templateProcessor.updateConfig({templateText: "Custom text"})');
-console.log('  templateProcessor.debugUIState() - Full UI analysis');
-console.log('  templateProcessor.logElementState(element, "context") - Element debugging');
+console.log('✅ TemplateProcessor initialized with intelligent appeal detection');
+console.log('🔧 Available commands:');
+console.log('  Main: processAppeal(), selectNewAppeal(), debugUIState()');
+console.log('  Time: findMostRecentAppeals(), extractTimeFromAppeal(text)');
+console.log('  Config: updateConfig(options), getConfig()');
+console.log('💡 Example: templateProcessor.processAppeal() // Process newest appeal');
